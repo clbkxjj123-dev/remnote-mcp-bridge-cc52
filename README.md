@@ -1,8 +1,17 @@
 # MCP Automation Bridge CC52
 
-This is a public source mirror of `robert7/remnote-mcp-bridge` v0.13.0 with a custom RemNote plugin ID (`remnote-mcp-bridge-cc52`) so it can be installed separately when RemNote has stale cache for the original plugin ID.
-
-Upstream: https://github.com/robert7/remnote-mcp-bridge
+> **Attribution / 来源声明**
+>
+> This repository is a personal-use mirror / derivative build of the upstream open-source project
+> [`robert7/remnote-mcp-bridge`](https://github.com/robert7/remnote-mcp-bridge), originally authored by Robert Spiegel and licensed under the MIT License.
+>
+> 本仓库是基于上游开源项目 [`robert7/remnote-mcp-bridge`](https://github.com/robert7/remnote-mcp-bridge) 的个人自用镜像/派生构建，原作者为 Robert Spiegel，遵循原项目 MIT License。
+>
+> Purpose / 用途：only to provide a public `repoUrl` and a custom RemNote plugin ID (`remnote-mcp-bridge-cc52`) for personal local installation, because RemNote kept stale cache for the original plugin ID. This repository is **not** an attempt to claim authorship or redistribute as an independent product.
+>
+> 用途仅限：为个人本地安装提供公开 `repoUrl` 与自定义 RemNote 插件 ID（`remnote-mcp-bridge-cc52`），以绕过 RemNote 对原插件 ID 的缓存冲突。本仓库**不主张原创，也不作为独立产品重新发布**。
+>
+> Upstream / 上游项目：https://github.com/robert7/remnote-mcp-bridge
 
 ---
 
