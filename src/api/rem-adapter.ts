@@ -76,9 +76,39 @@ export interface ReadNoteParams {
   view?: ResultView;
 }
 
+/**
+ * Rich text token for the cc52 update_note extension.
+ * Allows composing a Rem's front/back text from plain text and exact Rem references.
+ */
+export interface UpdateNoteRichTextToken {
+  type: 'text' | 'rem';
+  value?: string;
+  remId?: string;
+}
+
+/**
+ * cc52 fork: update_note keeps the pre-0.17 rich parameter set (appendContent,
+ * replaceContent, addTags, removeTags) for backward compatibility with existing
+ * bridge consumers, plus custom write extensions (addAliases, mergeFromRemId,
+ * richText/richTextBack, setParentId, setIsDocument, setIsFolder, removeAfter).
+ * The dedicated upstream actions (insert_children, replace_children, update_tags,
+ * move_note, set_document_status) remain available and are preferred for new consumers.
+ */
 export interface UpdateNoteParams {
   remId: string;
   title?: string;
+  appendContent?: string;
+  replaceContent?: string;
+  addTags?: string[];
+  removeTags?: string[];
+  addAliases?: string[];
+  mergeFromRemId?: string;
+  richText?: UpdateNoteRichTextToken[];
+  richTextBack?: UpdateNoteRichTextToken[];
+  setParentId?: string;
+  setIsDocument?: boolean;
+  setIsFolder?: boolean;
+  removeAfter?: boolean;
 }
 
 export interface SetDocumentStatusParams {
@@ -3090,13 +3120,62 @@ export class RemAdapter {
   /**
    * Update an existing note
    */
+  /**
+   * Build a RichTextInterface from cc52 update_note rich text tokens.
+   * Invalid tokens are skipped; returns null when nothing valid was provided.
+   */
+  private async buildRichTextFromTokens(
+    tokens: UpdateNoteRichTextToken[]
+  ): Promise<RichTextInterface | null> {
+    let builder: ReturnType<typeof this.plugin.richText.text> | null = null;
+    for (const token of tokens) {
+      if (!token || typeof token !== 'object') continue;
+      if (token.type === 'text' && typeof token.value === 'string') {
+        builder = builder ? builder.text(token.value) : this.plugin.richText.text(token.value);
+      } else if (token.type === 'rem' && typeof token.remId === 'string') {
+        builder = builder ? builder.rem(token.remId) : this.plugin.richText.rem(token.remId);
+      }
+    }
+    return builder ? await builder.value() : null;
+  }
+
+  /** Render a compact history label for rich text tokens, e.g. `front<<remId>>text`. */
+  private describeRichTextTokens(tokens: UpdateNoteRichTextToken[]): string {
+    return tokens.map((token) => (token.type === 'text' ? token.value : `<<${token.remId}>>`)).join('');
+  }
+
+  /**
+   * Add a tag to a Rem by tag NAME (creating the tag Rem when missing).
+   * Kept for the cc52 update_note compat path; the update_tags action is ID-based.
+   */
+  private async addTagToRemByName(rem: PluginRem, tagName: string): Promise<void> {
+    const tagRem = await this.plugin.rem.findByName([tagName], null);
+    if (tagRem) {
+      await rem.addTag(tagRem._id);
+      return;
+    }
+
+    const newTag = await this.plugin.rem.createRem();
+    if (newTag) {
+      await newTag.setText([tagName]);
+      await rem.addTag(newTag._id);
+    }
+  }
+
   async updateNote(params: UpdateNoteParams): Promise<{ titles: string[]; remIds: string[] }> {
     if (!this.settings.acceptWriteOperations) {
       throw new Error('Write operations are disabled in Automation Bridge settings');
     }
 
+    if (params.appendContent !== undefined && params.replaceContent !== undefined) {
+      throw new Error('appendContent and replaceContent cannot be used together');
+    }
+
+    if (params.replaceContent !== undefined && !this.settings.acceptReplaceOperation) {
+      throw new Error('Replace operation is disabled in Automation Bridge settings');
+    }
+
     const remId = this.requireString(params.remId, 'remId');
-    const title = this.requireString(params.title, 'title');
 
     const rem = await this.plugin.rem.findOne(remId);
 
@@ -3108,12 +3187,193 @@ export class RemAdapter {
     const titles: string[] = [];
 
     // Update title if provided
-    const richText = await this.parseMarkdownWithIdReferenceTokens(title);
-    await this.runInTransaction(async () => {
-      await rem.setText(richText);
-    });
-    titles.push(title);
-    remIds.push(remId);
+    if (params.title !== undefined && params.title !== null) {
+      const title = this.requireString(params.title, 'title');
+      const richText = await this.parseMarkdownWithIdReferenceTokens(title);
+      await this.runInTransaction(async () => {
+        await rem.setText(richText);
+      });
+      titles.push(title);
+      remIds.push(remId);
+    }
+
+    // cc52: set front text from rich text tokens (exact Rem references supported)
+    if (params.richText && Array.isArray(params.richText) && params.richText.length > 0) {
+      if (params.title !== undefined && params.title !== null) {
+        throw new Error('richText and title cannot be used together');
+      }
+      const frontText = await this.buildRichTextFromTokens(params.richText);
+      if (frontText) {
+        await this.runInTransaction(async () => {
+          await rem.setText(frontText);
+        });
+        titles.push(`[front] ${this.describeRichTextTokens(params.richText)}`);
+        remIds.push(remId);
+      }
+    }
+
+    // cc52: set back text (flashcard answer side) from rich text tokens
+    if (params.richTextBack && Array.isArray(params.richTextBack) && params.richTextBack.length > 0) {
+      const backText = await this.buildRichTextFromTokens(params.richTextBack);
+      if (backText) {
+        await this.runInTransaction(async () => {
+          await rem.setBackText(backText);
+        });
+        titles.push(`[back] ${this.describeRichTextTokens(params.richTextBack)}`);
+        remIds.push(remId);
+      }
+    }
+
+    // Replace content by clearing all direct children first, then adding new child lines.
+    if (params.replaceContent !== undefined) {
+      const replaceContent = this.requireString(params.replaceContent, 'replaceContent');
+      const normalizedContent = this.normalizeContent(replaceContent);
+      const preparedContent = normalizedContent
+        ? await this.prepareMarkdownIdReferenceTokens(normalizedContent)
+        : undefined;
+
+      const results = await this.runInTransaction(async () => {
+        await this.clearDirectChildren(rem);
+        if (preparedContent) {
+          const createdRems = await this.createRemsFromPreparedMarkdown(preparedContent, rem._id);
+          if (createdRems.length > 0) {
+            return await this.extractRemResults(createdRems);
+          }
+        }
+        return { titles: [], remIds: [] };
+      });
+      remIds.push(...results.remIds);
+      titles.push(...results.titles);
+    }
+
+    // Append content as new direct children.
+    if (params.appendContent !== undefined) {
+      const appendContent = this.requireString(params.appendContent, 'appendContent');
+      const normalizedContent = this.normalizeContent(appendContent);
+      if (normalizedContent) {
+        const createdRems = await this.runInTransaction(async () => {
+          return await this.createRemsFromMarkdown(normalizedContent, rem._id);
+        });
+        if (createdRems.length > 0) {
+          const results = await this.extractRemResults(createdRems);
+          remIds.push(...results.remIds);
+          titles.push(...results.titles);
+        }
+      }
+    }
+
+    // Add tags by name (creates missing tag Rems).
+    const addTags = this.optionalStringArray(params.addTags, 'addTags');
+    for (const tagName of addTags) {
+      await this.addTagToRemByName(rem, tagName);
+    }
+
+    // Remove tags by name.
+    const removeTags = this.optionalStringArray(params.removeTags, 'removeTags');
+    for (const tagName of removeTags) {
+      const tagRem = await this.plugin.rem.findByName([tagName], null);
+      if (tagRem) {
+        await rem.removeTag(tagRem._id);
+      }
+    }
+
+    // cc52: add aliases. Each alias is attempted independently so one bad/rejected
+    // alias doesn't abort the rest of the batch.
+    if (params.addAliases && params.addAliases.length > 0) {
+      for (const aliasText of params.addAliases) {
+        if (typeof aliasText !== 'string' || aliasText.length === 0) continue;
+        try {
+          const aliasRichText = await this.plugin.richText.parseFromMarkdown(aliasText);
+          await rem.getOrCreateAliasWithText(aliasRichText);
+        } catch (error) {
+          console.warn(
+            withScopedLogPrefix('adapter', `Failed to add alias "${aliasText}" to rem ${rem._id}`),
+            this.describeError(error)
+          );
+        }
+      }
+    }
+
+    // cc52: merge another Rem into this one, keeping its name as an alias.
+    if (params.mergeFromRemId && typeof params.mergeFromRemId === 'string') {
+      try {
+        const sourceRem = await this.plugin.rem.findOne(params.mergeFromRemId);
+        if (!sourceRem) {
+          throw new Error(`mergeFromRemId not found: ${params.mergeFromRemId}`);
+        }
+        await rem.mergeAndSetAlias(sourceRem._id);
+      } catch (error) {
+        throw new Error(
+          `mergeAndSetAlias failed (target=${remId}, source=${params.mergeFromRemId}): ${
+            this.describeError(error).message
+          }`
+        );
+      }
+    }
+
+    // cc52: reparent this Rem. Prefer the move_note action for position control.
+    if (params.setParentId !== undefined && typeof params.setParentId === 'string') {
+      try {
+        const parentRem = await this.plugin.rem.findOne(params.setParentId);
+        if (!parentRem) {
+          throw new Error(`setParentId not found: ${params.setParentId}`);
+        }
+        await rem.setParent(parentRem);
+        if (!remIds.includes(remId)) {
+          remIds.push(remId);
+          titles.push(`[REPARENTED to ${params.setParentId}]`);
+        }
+      } catch (error) {
+        throw new Error(
+          `setParent failed (remId=${remId}, newParent=${params.setParentId}): ${
+            this.describeError(error).message
+          }`
+        );
+      }
+    }
+
+    // cc52: toggle document status inline. Prefer set_document_status for dry-run support.
+    if (typeof params.setIsDocument === 'boolean') {
+      try {
+        await rem.setIsDocument(params.setIsDocument);
+        if (!remIds.includes(remId)) {
+          remIds.push(remId);
+          titles.push(`[setIsDocument=${params.setIsDocument}]`);
+        }
+      } catch (error) {
+        throw new Error(
+          `setIsDocument failed (remId=${remId}): ${this.describeError(error).message}`
+        );
+      }
+    }
+
+    // cc52: toggle folder status inline.
+    if (typeof params.setIsFolder === 'boolean') {
+      try {
+        await rem.setIsFolder(params.setIsFolder);
+        if (!remIds.includes(remId)) {
+          remIds.push(remId);
+          titles.push(`[setIsFolder=${params.setIsFolder}]`);
+        }
+      } catch (error) {
+        throw new Error(
+          `setIsFolder failed (remId=${remId}): ${this.describeError(error).message}`
+        );
+      }
+    }
+
+    // cc52: remove this Rem after all other operations. Deliberately last.
+    if (params.removeAfter === true) {
+      try {
+        await rem.remove();
+        if (!remIds.includes(remId)) {
+          remIds.push(remId);
+          titles.push('[REMOVED]');
+        }
+      } catch (error) {
+        throw new Error(`remove failed (remId=${remId}): ${this.describeError(error).message}`);
+      }
+    }
 
     return { titles, remIds };
   }

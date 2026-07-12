@@ -1,7 +1,7 @@
 declare const __PLUGIN_VERSION__: string;
 
 import { FocusEvents, SidebarEvents, type ReactRNPlugin, WindowEvents } from '@remnote/plugin-sdk';
-import { RemAdapter } from '../api/rem-adapter';
+import { RemAdapter, type UpdateNoteRichTextToken } from '../api/rem-adapter';
 import {
   type BridgeRequest,
   type CompanionInfo,
@@ -408,6 +408,18 @@ class BridgeRuntimeController implements BridgeRuntime {
         const result = await this.adapter.updateNote({
           remId: payload.remId as string,
           title: payload.title as string | undefined,
+          appendContent: payload.appendContent as string | undefined,
+          replaceContent: payload.replaceContent as string | undefined,
+          addTags: payload.addTags as string[] | undefined,
+          removeTags: payload.removeTags as string[] | undefined,
+          addAliases: payload.addAliases as string[] | undefined,
+          mergeFromRemId: payload.mergeFromRemId as string | undefined,
+          richText: payload.richText as UpdateNoteRichTextToken[] | undefined,
+          richTextBack: payload.richTextBack as UpdateNoteRichTextToken[] | undefined,
+          setParentId: payload.setParentId as string | undefined,
+          setIsDocument: payload.setIsDocument as boolean | undefined,
+          setIsFolder: payload.setIsFolder as boolean | undefined,
+          removeAfter: payload.removeAfter as boolean | undefined,
         });
         this.stats = { ...this.stats, updated: this.stats.updated + 1 };
         this.addHistoryEntry('update', result.titles || ['Note updated'], result.remIds);

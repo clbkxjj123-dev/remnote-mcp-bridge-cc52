@@ -2063,14 +2063,275 @@ describe('RemAdapter', () => {
       ).rejects.toThrow('Note not found: nonexistent');
     });
 
-    it('should reject update without title', async () => {
-      plugin.addTestRem('update_missing_title_test', 'Original title');
+    // cc52: update_note keeps the rich parameter set, so a bare call is a no-op
+    it('should return empty results when no operation is provided', async () => {
+      plugin.addTestRem('update_noop_test', 'Original title');
+
+      const result = await adapter.updateNote({ remId: 'update_noop_test' });
+
+      expect(result).toEqual({ titles: [], remIds: [] });
+      const rem = await plugin.rem.findOne('update_noop_test');
+      expect(rem!.text).toEqual(['Original title']);
+    });
+
+    it('should append content as new direct children', async () => {
+      plugin.addTestRem('append_test', 'Parent');
+
+      const result = await adapter.updateNote({
+        remId: 'append_test',
+        appendContent: '- New content1\n- More content2',
+      });
+
+      expect(result.remIds).toHaveLength(2);
+      const parent = await plugin.rem.findOne('append_test');
+      const children = await parent!.getChildrenRem();
+      expect(children.map((c) => c.text?.[0])).toEqual(['New content1', 'More content2']);
+    });
+
+    it('should replace direct children when replace operation is enabled', async () => {
+      const testRem = plugin.addTestRem('replace_test', 'Parent');
+      const oldChild = new MockRem('old_child', 'Old line');
+      await oldChild.setParent(testRem);
+      adapter.updateSettings({ acceptReplaceOperation: true });
+
+      const result = await adapter.updateNote({
+        remId: 'replace_test',
+        replaceContent: 'New line 1\nNew line 2',
+      });
+
+      expect(result.remIds).toHaveLength(2);
+      const children = await testRem.getChildrenRem();
+      expect(children.map((c) => c.text?.[0])).toEqual(['New line 1', 'New line 2']);
+    });
+
+    it('should reject replace when replace operation is disabled', async () => {
+      plugin.addTestRem('replace_disabled_test', 'Parent');
+      adapter.updateSettings({ acceptReplaceOperation: false });
 
       await expect(
         adapter.updateNote({
-          remId: 'update_missing_title_test',
-        } as Parameters<typeof adapter.updateNote>[0])
-      ).rejects.toThrow('title must be a string');
+          remId: 'replace_disabled_test',
+          replaceContent: 'Should fail',
+        })
+      ).rejects.toThrow('Replace operation is disabled in Automation Bridge settings');
+    });
+
+    it('should reject requests that include both appendContent and replaceContent', async () => {
+      plugin.addTestRem('append_replace_test', 'Parent');
+      adapter.updateSettings({ acceptReplaceOperation: true });
+
+      await expect(
+        adapter.updateNote({
+          remId: 'append_replace_test',
+          appendContent: 'A',
+          replaceContent: 'B',
+        })
+      ).rejects.toThrow('appendContent and replaceContent cannot be used together');
+    });
+
+    it('should add tags by name and create missing tag rems', async () => {
+      const testRem = plugin.addTestRem('tag_add_test', 'Tagged note');
+      plugin.addTestRem('tag_existing', 'ExistingTag', 'ExistingTag');
+
+      await adapter.updateNote({
+        remId: 'tag_add_test',
+        addTags: ['ExistingTag', 'BrandNewTag'],
+      });
+
+      expect(testRem.getTags()).toContain('tag_existing');
+      expect(testRem.getTags().length).toBe(2);
+    });
+
+    it('should remove tags by name', async () => {
+      const testRem = plugin.addTestRem('tag_remove_test', 'Note');
+      const tagRem = plugin.addTestRem('tag_to_remove', 'RemoveTag', 'RemoveTag');
+      await testRem.addTag(tagRem._id);
+
+      await adapter.updateNote({
+        remId: 'tag_remove_test',
+        removeTags: ['RemoveTag'],
+      });
+
+      expect(testRem.getTags()).not.toContain(tagRem._id);
+    });
+
+    it('should add aliases', async () => {
+      const testRem = plugin.addTestRem('alias_test', 'Aliased note');
+
+      await adapter.updateNote({
+        remId: 'alias_test',
+        addAliases: ['Alias One', 'Alias Two'],
+      });
+
+      const aliases = await testRem.getAliases();
+      expect(aliases.map((a) => a.text?.[0])).toEqual(['Alias One', 'Alias Two']);
+    });
+
+    it('should skip empty and non-string alias entries without throwing', async () => {
+      const testRem = plugin.addTestRem('alias_skip_test', 'Note');
+
+      await adapter.updateNote({
+        remId: 'alias_skip_test',
+        addAliases: ['', 123, 'Valid Alias'] as unknown as string[],
+      });
+
+      const aliases = await testRem.getAliases();
+      expect(aliases.map((a) => a.text?.[0])).toEqual(['Valid Alias']);
+    });
+
+    it('should continue adding remaining aliases when one alias write fails', async () => {
+      const testRem = plugin.addTestRem('alias_partial_fail_test', 'Note');
+      const getOrCreateSpy = vi
+        .spyOn(testRem, 'getOrCreateAliasWithText')
+        .mockRejectedValueOnce(new Error('SDK write failed'));
+
+      const result = await adapter.updateNote({
+        remId: 'alias_partial_fail_test',
+        addAliases: ['Bad Alias', 'Good Alias'],
+      });
+
+      expect(result).toEqual({ titles: [], remIds: [] });
+      expect(getOrCreateSpy).toHaveBeenCalledTimes(2);
+      const aliases = await testRem.getAliases();
+      expect(aliases.map((a) => a.text?.[0])).toEqual(['Good Alias']);
+    });
+
+    it('should merge another rem into this one via mergeFromRemId', async () => {
+      const targetRem = plugin.addTestRem('merge_target', 'Target');
+      plugin.addTestRem('merge_source', 'Source');
+
+      await adapter.updateNote({
+        remId: 'merge_target',
+        mergeFromRemId: 'merge_source',
+      });
+
+      expect(targetRem.mergedFromRemIds).toEqual(['merge_source']);
+    });
+
+    it('should throw a wrapped error when mergeFromRemId does not exist', async () => {
+      plugin.addTestRem('merge_target_missing', 'Target');
+
+      await expect(
+        adapter.updateNote({
+          remId: 'merge_target_missing',
+          mergeFromRemId: 'nonexistent_source',
+        })
+      ).rejects.toThrow(
+        'mergeAndSetAlias failed (target=merge_target_missing, source=nonexistent_source): mergeFromRemId not found: nonexistent_source'
+      );
+    });
+
+    it('should set front text from rich text tokens with rem references', async () => {
+      const testRem = plugin.addTestRem('richtext_front_test', 'Old front');
+      plugin.addTestRem('ref_target', 'Referenced');
+
+      const result = await adapter.updateNote({
+        remId: 'richtext_front_test',
+        richText: [
+          { type: 'text', value: 'See ' },
+          { type: 'rem', remId: 'ref_target' },
+        ],
+      });
+
+      expect(testRem.text).toEqual(['See ', { i: 'q', _id: 'ref_target' }]);
+      expect(result.titles).toEqual(['[front] See <<ref_target>>']);
+    });
+
+    it('should reject richText combined with title', async () => {
+      plugin.addTestRem('richtext_conflict_test', 'Old');
+
+      await expect(
+        adapter.updateNote({
+          remId: 'richtext_conflict_test',
+          title: 'New title',
+          richText: [{ type: 'text', value: 'Front' }],
+        })
+      ).rejects.toThrow('richText and title cannot be used together');
+    });
+
+    it('should set back text from richTextBack tokens', async () => {
+      const testRem = plugin.addTestRem('richtext_back_test', 'Front side');
+
+      const result = await adapter.updateNote({
+        remId: 'richtext_back_test',
+        richTextBack: [{ type: 'text', value: 'The answer' }],
+      });
+
+      expect(testRem.backText).toEqual(['The answer']);
+      expect(result.titles).toEqual(['[back] The answer']);
+    });
+
+    it('should reparent the rem via setParentId', async () => {
+      const testRem = plugin.addTestRem('reparent_test', 'Child');
+      const newParent = plugin.addTestRem('new_parent', 'Parent');
+
+      const result = await adapter.updateNote({
+        remId: 'reparent_test',
+        setParentId: 'new_parent',
+      });
+
+      expect(await testRem.getParentRem()).toBe(newParent);
+      expect(result.titles).toEqual(['[REPARENTED to new_parent]']);
+    });
+
+    it('should throw a wrapped error when setParentId does not exist', async () => {
+      plugin.addTestRem('reparent_missing_test', 'Child');
+
+      await expect(
+        adapter.updateNote({
+          remId: 'reparent_missing_test',
+          setParentId: 'nonexistent_parent',
+        })
+      ).rejects.toThrow(
+        'setParent failed (remId=reparent_missing_test, newParent=nonexistent_parent): setParentId not found: nonexistent_parent'
+      );
+    });
+
+    it('should toggle document and folder status inline', async () => {
+      const testRem = plugin.addTestRem('status_toggle_test', 'Note');
+
+      const result = await adapter.updateNote({
+        remId: 'status_toggle_test',
+        setIsDocument: true,
+        setIsFolder: true,
+      });
+
+      expect(await testRem.isDocument()).toBe(true);
+      expect(await testRem.isFolder()).toBe(true);
+      expect(result.titles).toEqual(['[setIsDocument=true]']);
+    });
+
+    it('should remove the rem when removeAfter is true', async () => {
+      const parentRem = plugin.addTestRem('remove_parent', 'Parent');
+      const testRem = plugin.addTestRem('remove_after_test', 'Doomed');
+      await testRem.setParent(parentRem);
+
+      const result = await adapter.updateNote({
+        remId: 'remove_after_test',
+        removeAfter: true,
+      });
+
+      expect(result.titles).toEqual(['[REMOVED]']);
+      expect(await parentRem.getChildrenRem()).toHaveLength(0);
+    });
+
+    it('should handle multiple operations at once', async () => {
+      const testRem = plugin.addTestRem('multi_update', 'Original');
+
+      const result = await adapter.updateNote({
+        remId: 'multi_update',
+        title: 'Updated',
+        appendContent: '- New content1\n- More content2',
+        addTags: ['NewTag'],
+        addAliases: ['Also Known As'],
+      });
+
+      expect(result.remIds).toContain('multi_update');
+      expect(testRem.text).toEqual(['Updated']);
+      const children = await testRem.getChildrenRem();
+      expect(children).toHaveLength(2);
+      expect(testRem.getTags().length).toBe(1);
+      expect((await testRem.getAliases()).map((a) => a.text?.[0])).toEqual(['Also Known As']);
     });
   });
 

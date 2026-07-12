@@ -1,4 +1,15 @@
-# RemNote Automation Bridge
+# RemNote Automation Bridge (cc52 fork)
+
+> **Attribution / 来源声明**
+>
+> This repository is a personal-use mirror / derivative build of the upstream open-source project
+> [`robert7/remnote-mcp-bridge`](https://github.com/robert7/remnote-mcp-bridge), originally authored by Robert Spiegel and licensed under the MIT License.
+>
+> 本仓库是基于上游开源项目 [`robert7/remnote-mcp-bridge`](https://github.com/robert7/remnote-mcp-bridge) 的个人自用镜像/派生构建，原作者为 Robert Spiegel，遵循原项目 MIT License。
+>
+> **cc52 changes / 本 fork 的改动**: custom plugin ID (`remnote-mcp-bridge-cc52-alias`) to bypass RemNote's stale plugin-ID cache, plus an extended `update_note` action keeping the pre-0.17 rich parameter set (`appendContent`, `replaceContent`, `addTags`, `removeTags`) and adding `addAliases`, `mergeFromRemId`, `richText`/`richTextBack`, `setParentId`, `setIsDocument`, `setIsFolder`, `removeAfter`. This repository is **not** an attempt to claim authorship or redistribute as an independent product.
+>
+> Upstream / 上游项目：https://github.com/robert7/remnote-mcp-bridge
 
 A RemNote plugin that exposes your RemNote knowledge base to external automation clients over a local WebSocket
 bridge. It is the shared RemNote endpoint for the `remnote-mcp-server` package:
@@ -230,7 +241,7 @@ the CLI maps them to commands:
 | `search`           | Search the knowledge base with query, filters, and tag ID/name metadata     |
 | `search_by_tag`    | Search by exact tag Rem ID with ancestor context and content controls       |
 | `read_note`        | Read a note's metadata, tags, and content in markdown or structured form    |
-| `update_note`      | Update note title                                                           |
+| `update_note`      | cc52: title, append/replace content, tags, aliases, merge, rich front/back text, reparent, document/folder status, remove |
 | `insert_children`  | Insert child Rems at deterministic positions                                |
 | `replace_children` | Replace direct children when destructive replacement is enabled             |
 | `update_tags`      | Add or remove tags by exact tag Rem ID                                      |

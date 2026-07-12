@@ -10,15 +10,19 @@ describe('package bin metadata', () => {
     });
   });
 
-  it('points the bridge bin metadata at an executable Node wrapper', () => {
-    const binPath = packageJson.bin['remnote-mcp-bridge'];
-    const stats = statSync(binPath);
-    const firstLine = readFileSync(binPath, 'utf8').split('\n')[0];
+  // NTFS does not carry the POSIX exec bit, so the mode check can never pass on Windows.
+  it.skipIf(process.platform === 'win32')(
+    'points the bridge bin metadata at an executable Node wrapper',
+    () => {
+      const binPath = packageJson.bin['remnote-mcp-bridge'];
+      const stats = statSync(binPath);
+      const firstLine = readFileSync(binPath, 'utf8').split('\n')[0];
 
-    expect(stats.isFile()).toBe(true);
-    expect(stats.mode & 0o111).not.toBe(0);
-    expect(firstLine).toBe('#!/usr/bin/env node');
-  });
+      expect(stats.isFile()).toBe(true);
+      expect(stats.mode & 0o111).not.toBe(0);
+      expect(firstLine).toBe('#!/usr/bin/env node');
+    }
+  );
 
   it('executes the bridge bin version command', () => {
     const result = spawnSync(process.execPath, ['bin/remnote-mcp-bridge.js', '--version'], {

@@ -143,6 +143,24 @@ export class MockRem {
     return this._aliases;
   }
 
+  async getOrCreateAliasWithText(aliasText: RichTextInterface): Promise<MockRem> {
+    const aliasRem = new MockRem(`${this._id}_alias_${this._aliases.length}`, '');
+    aliasRem.text = aliasText;
+    this._aliases.push(aliasRem);
+    return aliasRem;
+  }
+
+  /** IDs passed to mergeAndSetAlias, for test assertions */
+  mergedFromRemIds: string[] = [];
+
+  async mergeAndSetAlias(remToMergeIntoThisOne: string | MockRem): Promise<void> {
+    const sourceId =
+      typeof remToMergeIntoThisOne === 'string'
+        ? remToMergeIntoThisOne
+        : remToMergeIntoThisOne._id;
+    this.mergedFromRemIds.push(sourceId);
+  }
+
   setTaggedRemsMock(taggedRems: MockRem[]): void {
     this._taggedRems = taggedRems;
   }
@@ -181,6 +199,16 @@ export class MockRem {
 
   async setIsDocument(isDocument: boolean): Promise<void> {
     this._isDocument = isDocument;
+  }
+
+  private _isFolder = false;
+
+  async isFolder(): Promise<boolean> {
+    return this._isFolder;
+  }
+
+  async setIsFolder(isFolder: boolean): Promise<void> {
+    this._isFolder = isFolder;
   }
 
   async hasPowerup(code: string): Promise<boolean> {
@@ -319,6 +347,30 @@ export class MockRem {
 }
 
 /**
+ * Chainable mock of the SDK RichTextBuilder (richText.text(...).rem(...).value()).
+ */
+export class MockRichTextBuilder {
+  private parts: RichTextInterface = [];
+
+  text(value: string): MockRichTextBuilder {
+    this.parts.push(value);
+    return this;
+  }
+
+  rem(rem: string | MockRem): MockRichTextBuilder {
+    this.parts.push({
+      i: 'q',
+      _id: typeof rem === 'string' ? rem : rem._id,
+    } as RichTextInterface[number]);
+    return this;
+  }
+
+  async value(): Promise<RichTextInterface> {
+    return this.parts;
+  }
+}
+
+/**
  * Mock RemNote Plugin SDK
  */
 export class MockRemNotePlugin {
@@ -418,13 +470,9 @@ export class MockRemNotePlugin {
   };
 
   richText = {
-    rem: vi.fn((rem: string | MockRem) => ({
-      value: vi.fn(
-        async (): Promise<RichTextInterface> => [
-          { i: 'q', _id: typeof rem === 'string' ? rem : rem._id } as RichTextInterface[number],
-        ]
-      ),
-    })),
+    rem: vi.fn((rem: string | MockRem) => new MockRichTextBuilder().rem(rem)),
+
+    text: vi.fn((text: string) => new MockRichTextBuilder().text(text)),
 
     parseFromMarkdown: vi.fn(async (markdown: string): Promise<RichTextInterface> => {
       // Basic mock parsing for links: [text](url)
