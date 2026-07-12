@@ -225,7 +225,7 @@ the CLI maps them to commands:
 | `search`         | Search the knowledge base with query, filters, and note metadata (including tags) |
 | `search_by_tag`  | Search by tag with ancestor context and content controls                          |
 | `read_note`      | Read a note's metadata, tags, and content in markdown or structured form by ID    |
-| `update_note`    | Update title, append or replace content, add/remove tags                          |
+| `update_note`    | Update title, append or replace content, add/remove tags, add aliases             |
 | `append_journal` | Add hierarchical markdown content to today's daily document                       |
 | `read_table`     | Read Advanced Table columns, rows, and typed property metadata                    |
 | `get_status`     | Check connection status                                                           |

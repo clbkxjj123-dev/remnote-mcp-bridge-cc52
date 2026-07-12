@@ -388,6 +388,7 @@ class BridgeRuntimeController implements BridgeRuntime {
           replaceContent: payload.replaceContent as string | undefined,
           addTags: payload.addTags as string[] | undefined,
           removeTags: payload.removeTags as string[] | undefined,
+          addAliases: payload.addAliases as string[] | undefined,
         });
         this.stats = { ...this.stats, updated: this.stats.updated + 1 };
         this.addHistoryEntry('update', result.titles || ['Note updated'], result.remIds);

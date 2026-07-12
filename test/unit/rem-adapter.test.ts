@@ -1451,6 +1451,59 @@ describe('RemAdapter', () => {
       expect(testRem.getTags()).not.toContain(tagRem._id);
     });
 
+    it('should add aliases', async () => {
+      const testRem = plugin.addTestRem('alias_test', 'Aliased note');
+
+      await adapter.updateNote({
+        remId: 'alias_test',
+        addAliases: ['Alias One', 'Alias Two'],
+      });
+
+      const aliases = await testRem.getAliases();
+      expect(aliases.map((a) => a.text?.[0])).toEqual(['Alias One', 'Alias Two']);
+    });
+
+    it('should skip empty-string alias entries', async () => {
+      const testRem = plugin.addTestRem('alias_skip_test', 'Note');
+
+      await adapter.updateNote({
+        remId: 'alias_skip_test',
+        addAliases: ['', 'Valid Alias'],
+      });
+
+      const aliases = await testRem.getAliases();
+      expect(aliases.map((a) => a.text?.[0])).toEqual(['Valid Alias']);
+    });
+
+    it('should skip non-string alias entries without throwing', async () => {
+      const testRem = plugin.addTestRem('alias_non_string_test', 'Note');
+
+      await adapter.updateNote({
+        remId: 'alias_non_string_test',
+        addAliases: [123, 'Valid Alias'] as unknown as string[],
+      });
+
+      const aliases = await testRem.getAliases();
+      expect(aliases.map((a) => a.text?.[0])).toEqual(['Valid Alias']);
+    });
+
+    it('should continue adding remaining aliases when one alias write fails', async () => {
+      const testRem = plugin.addTestRem('alias_partial_fail_test', 'Note');
+      const getOrCreateSpy = vi
+        .spyOn(testRem, 'getOrCreateAliasWithText')
+        .mockRejectedValueOnce(new Error('SDK write failed'));
+
+      const result = await adapter.updateNote({
+        remId: 'alias_partial_fail_test',
+        addAliases: ['Bad Alias', 'Good Alias'],
+      });
+
+      expect(result).toEqual({ titles: [], remIds: [] });
+      expect(getOrCreateSpy).toHaveBeenCalledTimes(2);
+      const aliases = await testRem.getAliases();
+      expect(aliases.map((a) => a.text?.[0])).toEqual(['Good Alias']);
+    });
+
     it('should handle multiple operations at once', async () => {
       const testRem = plugin.addTestRem('multi_update', 'Original');
 

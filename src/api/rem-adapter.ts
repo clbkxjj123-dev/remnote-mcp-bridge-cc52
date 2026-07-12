@@ -70,6 +70,7 @@ export interface UpdateNoteParams {
   replaceContent?: string;
   addTags?: string[];
   removeTags?: string[];
+  addAliases?: string[];
 }
 
 export interface ReadTableParams {
@@ -1684,6 +1685,23 @@ export class RemAdapter {
         const tagRem = await this.plugin.rem.findByName([tagName], null);
         if (tagRem) {
           await rem.removeTag(tagRem._id);
+        }
+      }
+    }
+
+    // Add aliases. Each alias is attempted independently so one bad/rejected
+    // alias doesn't abort the rest of the batch.
+    if (params.addAliases && params.addAliases.length > 0) {
+      for (const aliasText of params.addAliases) {
+        if (typeof aliasText !== 'string' || aliasText.length === 0) continue;
+        try {
+          const richText = await this.plugin.richText.parseFromMarkdown(aliasText);
+          await rem.getOrCreateAliasWithText(richText);
+        } catch (error) {
+          console.warn(
+            withScopedLogPrefix('adapter', `Failed to add alias "${aliasText}" to rem ${rem._id}`),
+            this.describeError(error)
+          );
         }
       }
     }

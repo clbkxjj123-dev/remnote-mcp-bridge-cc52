@@ -143,6 +143,13 @@ export class MockRem implements Partial<PluginRem> {
     return this._aliases;
   }
 
+  async getOrCreateAliasWithText(aliasText: RichTextInterface): Promise<MockRem> {
+    const aliasRem = new MockRem(`${this._id}_alias_${this._aliases.length}`, '');
+    aliasRem.text = aliasText;
+    this._aliases.push(aliasRem);
+    return aliasRem;
+  }
+
   setTaggedRemsMock(taggedRems: MockRem[]): void {
     this._taggedRems = taggedRems;
   }
