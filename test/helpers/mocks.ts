@@ -2,7 +2,7 @@
  * Mock implementations for testing
  */
 import { vi } from 'vitest';
-import type { ReactRNPlugin, RichTextInterface, PluginRem, SetRemType } from '@remnote/plugin-sdk';
+import type { RichTextInterface, PluginRem, SetRemType } from '@remnote/plugin-sdk';
 import { MessagingEvents, RemType } from '@remnote/plugin-sdk';
 import { BridgeRequest } from '../../src/bridge/websocket-client';
 
@@ -87,7 +87,7 @@ export class MockWebSocket {
 /**
  * Mock Rem implementation
  */
-export class MockRem implements Partial<PluginRem> {
+export class MockRem {
   _id: string;
   text: RichTextInterface;
   backText?: RichTextInterface;
@@ -143,13 +143,6 @@ export class MockRem implements Partial<PluginRem> {
     return this._aliases;
   }
 
-  async getOrCreateAliasWithText(aliasText: RichTextInterface): Promise<MockRem> {
-    const aliasRem = new MockRem(`${this._id}_alias_${this._aliases.length}`, '');
-    aliasRem.text = aliasText;
-    this._aliases.push(aliasRem);
-    return aliasRem;
-  }
-
   setTaggedRemsMock(taggedRems: MockRem[]): void {
     this._taggedRems = taggedRems;
   }
@@ -184,6 +177,10 @@ export class MockRem implements Partial<PluginRem> {
 
   async isDocument(): Promise<boolean> {
     return this._isDocument;
+  }
+
+  async setIsDocument(isDocument: boolean): Promise<void> {
+    this._isDocument = isDocument;
   }
 
   async hasPowerup(code: string): Promise<boolean> {
@@ -237,6 +234,18 @@ export class MockRem implements Partial<PluginRem> {
     return this._tagPropertyValues.get(propertyId) ?? [];
   }
 
+  async setTagPropertyValue(
+    propertyId: string,
+    value: RichTextInterface | undefined
+  ): Promise<void> {
+    if (value === undefined) {
+      this._tagPropertyValues.delete(propertyId);
+      return;
+    }
+
+    this._tagPropertyValues.set(propertyId, value);
+  }
+
   /** Configure mock to behave as a table */
   setIsTableMock(val: boolean): void {
     this._isTable = val;
@@ -258,10 +267,23 @@ export class MockRem implements Partial<PluginRem> {
     this.type = type as RemType;
   }
 
-  async setParent(parent: Rem | Rem): Promise<void> {
-    this.parent = parent as MockRem;
-    if (!this.parent.children.includes(this)) {
-      this.parent.children.push(this);
+  async setParent(
+    parent: PluginRem | MockRem | null,
+    positionAmongstSiblings?: number
+  ): Promise<void> {
+    if (this.parent) {
+      this.parent.children = this.parent.children.filter((child) => child !== this);
+    }
+
+    this.parent = parent as MockRem | null;
+
+    if (this.parent) {
+      const existingIndex = this.parent.children.indexOf(this);
+      if (existingIndex !== -1) {
+        this.parent.children.splice(existingIndex, 1);
+      }
+      const insertIndex = positionAmongstSiblings ?? this.parent.children.length;
+      this.parent.children.splice(insertIndex, 0, this);
     }
   }
 
@@ -299,7 +321,7 @@ export class MockRem implements Partial<PluginRem> {
 /**
  * Mock RemNote Plugin SDK
  */
-export class MockRemNotePlugin implements Partial<ReactRNPlugin> {
+export class MockRemNotePlugin {
   rootURL = 'https://example.test/plugin/';
   private rems = new Map<string, MockRem>();
   private remsByName = new Map<string, MockRem>();
@@ -379,9 +401,12 @@ export class MockRemNotePlugin implements Partial<ReactRNPlugin> {
 
           if (stack.length === 0) {
             // Top-level: attach to supplied parentRem
-            if (parentRem) await rem.setParent(parentRem as never);
+            if (parentRem) {
+              await rem.setParent(parentRem as never, (await parentRem.getChildrenRem()).length);
+            }
           } else {
-            await rem.setParent(stack[stack.length - 1].rem as never);
+            const stackParent = stack[stack.length - 1].rem;
+            await rem.setParent(stackParent as never, (await stackParent.getChildrenRem()).length);
           }
 
           stack.push({ rem, level });
@@ -393,6 +418,14 @@ export class MockRemNotePlugin implements Partial<ReactRNPlugin> {
   };
 
   richText = {
+    rem: vi.fn((rem: string | MockRem) => ({
+      value: vi.fn(
+        async (): Promise<RichTextInterface> => [
+          { i: 'q', _id: typeof rem === 'string' ? rem : rem._id } as RichTextInterface[number],
+        ]
+      ),
+    })),
+
     parseFromMarkdown: vi.fn(async (markdown: string): Promise<RichTextInterface> => {
       // Basic mock parsing for links: [text](url)
       const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/;
@@ -408,6 +441,58 @@ export class MockRemNotePlugin implements Partial<ReactRNPlugin> {
       }
       return [markdown];
     }),
+
+    replaceAllRichText: vi.fn(
+      async (
+        richText: RichTextInterface,
+        findText: RichTextInterface,
+        replacementText: RichTextInterface
+      ): Promise<RichTextInterface> => {
+        const placeholder = findText[0];
+        if (typeof placeholder !== 'string' || placeholder.length === 0) {
+          return richText;
+        }
+
+        const replaceInText = (
+          text: string,
+          buildTextElement: (part: string) => RichTextInterface[number]
+        ): RichTextInterface => {
+          const parts = text.split(placeholder);
+          if (parts.length === 1) {
+            return [buildTextElement(text)];
+          }
+
+          const result: RichTextInterface = [];
+          for (const [index, part] of parts.entries()) {
+            if (part) {
+              result.push(buildTextElement(part));
+            }
+            if (index < parts.length - 1) {
+              result.push(...replacementText);
+            }
+          }
+          return result;
+        };
+
+        return richText.flatMap((element) => {
+          if (typeof element === 'string') {
+            return replaceInText(element, (part) => part);
+          }
+
+          if (
+            element &&
+            typeof element === 'object' &&
+            'i' in element &&
+            element.i === 'm' &&
+            typeof element.text === 'string'
+          ) {
+            return replaceInText(element.text, (part) => ({ ...element, text: part }));
+          }
+
+          return [element];
+        }) as RichTextInterface;
+      }
+    ),
   };
 
   search = {
@@ -506,6 +591,10 @@ export class MockRemNotePlugin implements Partial<ReactRNPlugin> {
 
     registerCommand: vi.fn(async (): Promise<void> => {
       // Mock implementation
+    }),
+
+    transaction: vi.fn(async <T>(fn: () => T | Promise<T>): Promise<Awaited<T>> => {
+      return await fn();
     }),
   };
 

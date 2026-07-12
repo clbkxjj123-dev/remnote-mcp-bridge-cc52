@@ -7,11 +7,11 @@ status means.
 
 1. The plugin activates when RemNote loads.
 2. The bridge runtime starts automatically in the background.
-3. The bridge tries to connect to the configured WebSocket companion URL.
+3. The bridge tries to connect to the configured WebSocket server URL.
    - Default: `ws://127.0.0.1:3002`
 4. Once connected, the bridge is ready for either:
-   - `remnote-mcp-server`
-   - `remnote-cli daemon`
+   - MCP clients connected to `remnote-mcp-server`
+   - `remnote-cli` commands connected to `remnote-mcp-server`
 
 The right-sidebar Automation Bridge panel is optional. It is now a monitoring and manual-control surface, not the thing
 that creates the connection.
@@ -21,10 +21,10 @@ that creates the connection.
 The connection direction is:
 
 ```text
-RemNote UI + Bridge Plugin -> WebSocket Companion App <- MCP clients / CLI commands
+RemNote UI + Bridge Plugin -> remnote-mcp-server <- MCP clients / remnote-cli commands
 ```
 
-This can feel backwards at first because many people expect the companion app to connect into RemNote.
+This can feel backwards at first because many people expect the local server process to connect into RemNote.
 
 The reason is a RemNote platform constraint: RemNote plugins do not have a hosted backend API. RemNote explicitly
 recommends frontend-plugin-based approaches instead of relying on a backend plugin API. See the official RemNote docs:
@@ -33,22 +33,21 @@ recommends frontend-plugin-based approaches instead of relying on a backend plug
 So in this project:
 
 - the bridge plugin is the WebSocket client
-- the MCP server or CLI daemon is the WebSocket server
-- MCP clients and CLI commands talk to the companion app, not directly to RemNote
+- `remnote-mcp-server` is the WebSocket server
+- MCP clients and CLI commands talk to `remnote-mcp-server`, not directly to RemNote
 
-That is why startup order matters: the bridge always tries to connect outward from RemNote to the configured companion
-process.
+That is why startup order matters: the bridge always tries to connect outward from RemNote to the configured local
+server process.
 
 ## Recommended Startup Order
 
-1. Start the companion process first.
-   - MCP path: `remnote-mcp-server`
-   - CLI path: `remnote-cli daemon start`
+1. Start the local server process first.
+   - `remnote-mcp-server`
 2. Open RemNote.
 3. Wait for the bridge to connect in the background.
 4. Open the sidebar panel only if you want to inspect status, logs, or click **Reconnect Now**.
 
-If RemNote was already open before the companion process started, the bridge should still reconnect automatically. It
+If RemNote was already open before the local server process started, the bridge should still reconnect automatically. It
 may just take a moment depending on which retry phase it is currently in.
 
 ## Retry Phases
@@ -61,12 +60,12 @@ If that succeeds, the sidebar shows **Connected** and the bridge is ready to acc
 
 ![Connected bridge state](./images/connection-lifecycle-02-connected-live-session.jpg)
 
-Connected state example: the bridge is live, the companion app endpoint is shown, and the session card confirms a
+Connected state example: the bridge is live, the local server endpoint is shown, and the session card confirms a
 healthy active connection.
 
 ### Burst Retry
 
-If the companion process is unavailable, the bridge enters a fast retry window:
+If the local server process is unavailable, the bridge enters a fast retry window:
 
 - Up to 10 retries
 - Exponential backoff
@@ -109,7 +108,7 @@ Immediate reconnect can be triggered by:
 This means a common workflow works well:
 
 1. Leave RemNote open.
-2. Start the CLI daemon or MCP server later.
+2. Start `remnote-mcp-server` later.
 3. Open the Automation Bridge panel or move focus to another note/pane in RemNote.
 4. The bridge should immediately restart the faster retry window instead of waiting for the full standby timer.
 
@@ -160,7 +159,7 @@ The panel shows:
 
 ## Practical Scenarios
 
-### RemNote Open First, Daemon Starts Later
+### RemNote Open First, Server Starts Later
 
 This is supported.
 
@@ -177,17 +176,54 @@ window instead of doing only one isolated retry attempt.
 
 This is also supported.
 
-If the companion process appears much later, the bridge eventually reconnects on its own. The sidebar gives you the
+If the local server process appears much later, the bridge eventually reconnects on its own. The sidebar gives you the
 best clue about whether it is still in fast retry mode or already in standby.
 
 ## If It Still Does Not Connect
 
 Check:
 
-1. The companion process is actually running.
-2. The WebSocket URL in plugin settings matches the companion port.
+1. `remnote-mcp-server` is actually running.
+2. The WebSocket URL in plugin settings matches the server port.
 3. Nothing else is occupying the port.
 4. The sidebar's last disconnect reason and logs.
 
-Then use **Reconnect Now** once after confirming the companion process is listening. If that still fails, capture the
+Then use **Reconnect Now** once after confirming `remnote-mcp-server` is listening. If that still fails, capture the
 sidebar state and logs before restarting anything.
+
+### Chrome Local Network Access Can Block Browser WebSockets
+
+This issue is only relevant when RemNote is running in a Chromium-based browser such as Chrome, Arc, Brave, or Edge.
+The RemNote desktop app currently works normally with the local bridge WebSocket.
+
+Chrome/Chromium 147+ can block the bridge WebSocket when RemNote is running in the browser and the marketplace plugin
+iframe is loaded from `https://www.remnoteplugins.com`. The bridge connects from that public HTTPS origin to the local
+local server WebSocket at `ws://127.0.0.1:3002`, which can trigger Chrome's Local Network Access checks for WebSockets.
+
+Typical symptoms:
+
+- The Automation Bridge sidebar stays **Retrying** or **Waiting for server**.
+- DevTools shows `WebSocket connection to 'ws://127.0.0.1:3002/' failed:`.
+- `remnote-mcp-server` is listening, but its logs show no incoming WebSocket connection attempt.
+- Opening `http://127.0.0.1:3002` or `ws://127.0.0.1:3002` from another browser context may still prove the port is
+  reachable, because the failing connection is the plugin iframe connection.
+
+![Chrome blocking the local bridge WebSocket](./images/chrome-local-network-access-websocket-blocked.jpg)
+
+One workaround is to disable Chrome's experimental WebSocket Local Network Access flag:
+
+1. Open `chrome://flags/#local-network-access-check-websockets`.
+2. Set **Local Network Access Checks for WebSockets** to **Disabled**.
+3. Restart Chrome.
+4. Reopen RemNote and use **Reconnect Now** if needed.
+
+![Chrome Local Network Access WebSocket flag disabled and bridge connected](./images/chrome-local-network-access-websocket-disabled-connected.jpg)
+
+This flag is browser-wide and experimental. Chrome warns that changing experimental flags can affect browser security,
+privacy, or stored data, so only use this workaround if you understand the tradeoff. See the
+[ChromeStatus entry](https://chromestatus.com/feature/5197681148428288) and Chromium's
+[Local Network Access checks for WebSockets discussion](https://groups.google.com/a/chromium.org/g/blink-dev/c/4gx2y5jPGbU)
+for browser-side details.
+
+For development or source-level testing, you can avoid the marketplace plugin origin by loading the plugin from
+`http://localhost:8080/`; see [Run The Plugin Locally](./development-run-plugin-locally.md).

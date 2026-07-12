@@ -17,6 +17,10 @@ RemNote distinguishes three important relationship mechanisms:
 - Tag (`##...`): classify a Rem with another Rem acting as a tag.
 - Portal (`((...))`): display the same underlying content in multiple places.
 
+Bridge write actions also support `[[id:<remId>]]` inside markdown-capable text fields when the caller needs a
+deterministic reference to an existing Rem. The bridge validates the exact ID and writes a real Rem reference instead
+of relying on name lookup, which can create duplicate stubs when names are ambiguous or missing.
+
 Implication for agents:
 
 - A matching Rem in search results may be linked context, tagged context, or portal context; they are not
@@ -40,6 +44,8 @@ summarization misses.
 Implication for agents:
 
 - Search/read output should avoid flattening property-bearing content into unstructured text whenever possible.
+- Property writes should use exact Rem IDs for the target Rem, owning tag/table Rem, and property Rem. Select/dropdown
+  values are Rem references to option Rem IDs, not name strings.
 
 ## Sources
 

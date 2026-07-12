@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { BridgeRuntimeSnapshot } from '../../src/bridge/runtime';
 import { buildConnectionUiState, formatRelativeDuration } from '../../src/widgets/connection-ui';
 
+const TEST_BRIDGE_VERSION = '1.2.3';
+const TEST_EXPECTED_BRIDGE_LINE = '1.2.x';
+
 function createSnapshot(overrides: Partial<BridgeRuntimeSnapshot> = {}): BridgeRuntimeSnapshot {
   return {
     status: 'disconnected',
     retryPhase: 'idle',
-    bridgeVersion: '0.13.0',
+    bridgeVersion: TEST_BRIDGE_VERSION,
     installMode: 'marketplace',
     wsUrl: 'ws://127.0.0.1:3002',
     logs: [],
@@ -80,5 +83,21 @@ describe('connection-ui', () => {
     expect(ui.summary).toBe('Ready');
     expect(ui.phaseLabel).toBeUndefined();
     expect(ui.lastConnectedLabel).toBeUndefined();
+  });
+
+  it('explains bridge compatibility disconnects with the official plugin name', () => {
+    const ui = buildConnectionUiState(
+      createSnapshot({
+        bridgeVersion: TEST_BRIDGE_VERSION,
+        lastDisconnectReason: `1008 Wrong/incompatible RemNote plugin installed. Install MCP/OpenClaw Automation Bridge ${TEST_EXPECTED_BRIDGE_LINE}.`,
+      })
+    );
+
+    expect(ui.lastDisconnectLabel).toBe(
+      `Wrong/incompatible RemNote plugin installed. Install MCP/OpenClaw Automation Bridge ${TEST_EXPECTED_BRIDGE_LINE}.`
+    );
+    expect(ui.hint).toBe(
+      'Disable the incompatible RemNote plugin and install the official bridge plugin.'
+    );
   });
 });

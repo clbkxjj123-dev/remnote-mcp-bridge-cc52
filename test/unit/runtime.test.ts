@@ -1,4 +1,4 @@
-import { FocusEvents, SidebarEvents, WindowEvents } from '@remnote/plugin-sdk';
+import { FocusEvents, RemType, SidebarEvents, WindowEvents } from '@remnote/plugin-sdk';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import {
   initializeBridgeRuntime,
@@ -8,6 +8,7 @@ import {
   getBridgeInstallMode,
 } from '../../src/bridge/runtime';
 import { MockRem, MockRemNotePlugin, MockWebSocket } from '../helpers/mocks';
+import { RemAdapter } from '../../src/api/rem-adapter';
 import {
   DEVTOOLS_EXECUTE_EVENT,
   DEVTOOLS_RESULT_EVENT,
@@ -23,7 +24,7 @@ import {
   SETTING_ACCEPT_WRITE_OPERATIONS,
   SETTING_ACCEPT_REPLACE_OPERATION,
   SETTING_AUTO_TAG_ENABLED,
-  SETTING_AUTO_TAG,
+  SETTING_AUTO_TAG_REM_ID,
   SETTING_JOURNAL_PREFIX,
   SETTING_JOURNAL_TIMESTAMP,
   SETTING_DEFAULT_PARENT,
@@ -31,6 +32,8 @@ import {
 import { wait } from '../helpers/test-server';
 
 global.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+
+const TEST_COMPANION_VERSION = '1.2.3';
 
 describe('Bridge runtime', () => {
   let plugin: MockRemNotePlugin;
@@ -42,7 +45,7 @@ describe('Bridge runtime', () => {
     plugin.setTestSetting(SETTING_ACCEPT_WRITE_OPERATIONS, true);
     plugin.setTestSetting(SETTING_ACCEPT_REPLACE_OPERATION, false);
     plugin.setTestSetting(SETTING_AUTO_TAG_ENABLED, true);
-    plugin.setTestSetting(SETTING_AUTO_TAG, '');
+    plugin.setTestSetting(SETTING_AUTO_TAG_REM_ID, '');
     plugin.setTestSetting(SETTING_JOURNAL_PREFIX, '');
     plugin.setTestSetting(SETTING_JOURNAL_TIMESTAMP, true);
     plugin.setTestSetting(SETTING_DEFAULT_PARENT, '');
@@ -167,6 +170,103 @@ describe('Bridge runtime', () => {
     expect(snapshot.history[0]?.titles).toContain('TestTable');
   });
 
+  it('handles set_property action via devtools request', async () => {
+    plugin.setTestSetting(SETTING_WS_URL, 'ws://127.0.0.1:3002');
+
+    const note = plugin.addTestRem('runtime_property_note', 'Tagged note');
+    const tagRem = plugin.addTestRem('runtime_property_tag', 'Runtime Tag');
+    const propertyRem = new MockRem('runtime_property_id', 'Use Context');
+    propertyRem.setIsPropertyMock(true);
+    propertyRem.setPropertyTypeMock('text');
+    await propertyRem.setParent(tagRem as never);
+
+    runtime = await initializeBridgeRuntime(plugin as unknown as never);
+    await wait(10);
+
+    const resultPromise = new Promise<DevToolsResultDetail>((resolve) => {
+      window.addEventListener(
+        DEVTOOLS_RESULT_EVENT,
+        (event) => resolve((event as CustomEvent<DevToolsResultDetail>).detail),
+        { once: true }
+      );
+    });
+
+    window.dispatchEvent(
+      new CustomEvent(DEVTOOLS_EXECUTE_EVENT, {
+        detail: {
+          id: 'devtools-set-property',
+          action: 'set_property',
+          payload: {
+            remId: 'runtime_property_note',
+            tagRemId: 'runtime_property_tag',
+            propertyRemId: 'runtime_property_id',
+            value: { kind: 'text', text: 'People' },
+          },
+        },
+      })
+    );
+
+    const result = await resultPromise;
+    const snapshot = runtime.getSnapshot();
+
+    expect(result.ok).toBe(true);
+    expect(result.action).toBe('set_property');
+    expect(result.result).toMatchObject({
+      remId: 'runtime_property_note',
+      tagRemId: 'runtime_property_tag',
+      propertyRemId: 'runtime_property_id',
+      valueKind: 'text',
+    });
+    expect(note.getTags()).toContain('runtime_property_tag');
+    expect(await note.getTagPropertyValue('runtime_property_id')).toEqual(['People']);
+    expect(snapshot.stats.updated).toBe(1);
+    expect(snapshot.history[0]?.action).toBe('update');
+    expect(snapshot.history[0]?.titles).toContain('Property updated');
+  });
+
+  it('handles set_document_status action via devtools request', async () => {
+    plugin.setTestSetting(SETTING_WS_URL, 'ws://127.0.0.1:3002');
+    const rem = plugin.addTestRem('runtime_doc_status', 'Runtime concept');
+    rem.type = RemType.CONCEPT;
+
+    runtime = await initializeBridgeRuntime(plugin as unknown as never);
+    await wait(10);
+
+    const resultPromise = new Promise<DevToolsResultDetail>((resolve) => {
+      window.addEventListener(
+        DEVTOOLS_RESULT_EVENT,
+        (event) => resolve((event as CustomEvent<DevToolsResultDetail>).detail),
+        { once: true }
+      );
+    });
+
+    window.dispatchEvent(
+      new CustomEvent(DEVTOOLS_EXECUTE_EVENT, {
+        detail: {
+          id: 'devtools-set-document-status',
+          action: 'set_document_status',
+          payload: {
+            remId: 'runtime_doc_status',
+            isDocument: true,
+            dryRun: false,
+            expectedOldRemType: 'concept',
+          },
+        },
+      })
+    );
+
+    const result = await resultPromise;
+    const snapshot = runtime.getSnapshot();
+
+    expect(result.ok).toBe(true);
+    expect(result.action).toBe('set_document_status');
+    expect(result.result).toMatchObject({ remId: 'runtime_doc_status', newRemType: 'document' });
+    expect(await rem.isDocument()).toBe(true);
+    expect(snapshot.stats.updated).toBe(1);
+    expect(snapshot.history[0]?.action).toBe('update');
+    expect(snapshot.history[0]?.titles).toContain('Document status updated: Runtime concept');
+  });
+
   it('publishes runtime snapshots over the UI bridge while no widget is mounted', async () => {
     plugin.setTestSetting(SETTING_WS_URL, 'ws://127.0.0.1:3002');
     runtime = await initializeBridgeRuntime(plugin as unknown as never);
@@ -182,11 +282,13 @@ describe('Bridge runtime', () => {
 
     const latestSnapshot = await plugin.storage.getSession(BRIDGE_UI_SNAPSHOT_STORAGE_KEY);
     expect(isSerializedBridgeRuntimeSnapshot(latestSnapshot)).toBe(true);
-    expect(latestSnapshot?.status).toBe('connected');
-    expect(latestSnapshot?.installMode).toBe('marketplace');
+    if (!isSerializedBridgeRuntimeSnapshot(latestSnapshot)) {
+      throw new Error('expected serialized bridge runtime snapshot');
+    }
+    expect(latestSnapshot.status).toBe('connected');
+    expect(latestSnapshot.installMode).toBe('marketplace');
     expect(
-      latestSnapshot?.logs.some((entry) => entry.message.includes('RemAdapter initialized')) ??
-        false
+      latestSnapshot.logs.some((entry) => entry.message.includes('RemAdapter initialized'))
     ).toBe(true);
   });
 
@@ -198,17 +300,19 @@ describe('Bridge runtime', () => {
     MockWebSocket.instances.at(-1)?.simulateMessage({
       type: 'companion_info',
       kind: 'mcp-server',
-      version: '0.13.0',
+      version: TEST_COMPANION_VERSION,
     });
     await wait(10);
 
     const snapshot = runtime.getSnapshot();
     expect(snapshot.companion).toEqual({
       kind: 'mcp-server',
-      version: '0.13.0',
+      version: TEST_COMPANION_VERSION,
     });
     expect(
-      snapshot.logs.some((entry) => entry.message.includes('Companion ready: MCP server v0.13.0'))
+      snapshot.logs.some((entry) =>
+        entry.message.includes(`Companion ready: MCP server v${TEST_COMPANION_VERSION}`)
+      )
     ).toBe(true);
   });
 
@@ -396,5 +500,39 @@ describe('Bridge runtime', () => {
 
     // Verify ordering: newest first
     expect(snapshot.history[0].titles[0]).toBe(`Note ${count - 1}`);
+  });
+
+  it('sanitizes null/invalid parentRemId and cursor values to undefined for search', async () => {
+    plugin.setTestSetting(SETTING_WS_URL, 'ws://127.0.0.1:3002');
+    runtime = await initializeBridgeRuntime(plugin as unknown as never);
+    await wait(10);
+
+    const searchSpy = vi.spyOn(RemAdapter.prototype, 'search');
+
+    window.dispatchEvent(
+      new CustomEvent(DEVTOOLS_EXECUTE_EVENT, {
+        detail: {
+          id: 'devtools-search-sanitize',
+          action: 'search',
+          payload: {
+            query: 'test query',
+            parentRemId: null,
+            cursor: null,
+          },
+        },
+      })
+    );
+
+    await wait(10);
+
+    expect(searchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: 'test query',
+        parentRemId: undefined,
+        cursor: undefined,
+      })
+    );
+
+    searchSpy.mockRestore();
   });
 });

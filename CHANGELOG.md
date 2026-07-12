@@ -7,6 +7,88 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add support for scoped search in `search` action via `parentRemId`, enabling queries limited to a specific Rem's subtree. Contributed by Twb06.
+- Incorporate `parentRemId` into search cursor snapshots and hashing to enforce scope safety and readability during cursor pagination.
+- Add `set_property` bridge action for exact-ID tag/table property writes, including text, Rem-reference/select-option,
+  and clear value payloads.
+- Add a repo-local Codex skill for running live integration tests through the canonical `remnote-mcp-server` agent
+  wrapper.
+- Add exact Rem reference tokens via `[[id:<remId>]]` in markdown-capable write fields, avoiding name-lookup stubs when
+  linking to existing Rems by ID.
+- Add scoped bridge diagnostics for `insert_children` writes so live RemNote hangs can be isolated to the exact SDK
+  checkpoint.
+
+### Fixed
+
+- Stop scoped search subtree validation early when a cyclic parent chain is encountered.
+- Fix `insert_children` transaction handling so live RemNote writes return plain result data instead of SDK Rem objects,
+  preventing transaction completion timeouts.
+
+## [0.16.0] - 2026-06-05
+
+### Added
+
+- Add document-status support for Rems: `set_document_status` previews or applies document status while preserving Rem
+  IDs, children, tags, parents, and concept/card metadata; `create_note` can mark the created title/root Rem as a
+  document with `asDocument`.
+- Add discovery-oriented hierarchy APIs: parent-first `ancestors` via `ancestorDepth`, compact `view` output control,
+  direct-child listing, and dry-run-first note moving.
+- Add cursor paging metadata to `search` and `search_by_tag`, including `hasMore`, `nextCursor`, and explicit
+  snapshot-cap truncation reporting.
+- Preserve inline Rem references in `search`, `search_by_tag`, and `read_note` output by rendering resolvable
+  references as `[[Target Title]]` and exposing `inlineRefs` metadata with exact target Rem IDs.
+- Add `search_by_tag.resultMode` with direct tagged Rem results and `matchedRems` metadata for context results.
+
+### Changed
+
+- Classify Rems that are both documents and concepts as `document` in bridge search/read outputs while keeping card
+  metadata such as `cardDirection` separate.
+- Run lint, format, release build validation, and production dist build helpers through local package binaries instead
+  of `npx`.
+
+### Fixed
+
+- Fix dry-run `move_note` previews so `ancestorsAfterTruncated` is reported when the proposed new parent has hidden
+  ancestors at the requested depth.
+- Fix `run-prod-build.sh` to resolve Webpack from `node_modules/.bin` when run outside npm script PATH setup.
+
+## [0.15.0] - 2026-05-15
+
+### Changed
+
+- Changed tag metadata to return exact tag Rem IDs plus names as `{ tagRemId, name }` objects.
+- Changed `search_by_tag` to use exact tag Rem IDs through `tagRemId`, avoiding ambiguous tag name or alias lookup.
+- Split bridge write actions so `update_note` handles title updates, `insert_children` handles ordered child creation,
+  `replace_children` handles gated destructive child replacement, and `update_tags` mutates tags by exact Rem ID.
+- Changed note creation, journal appends, and automatic bridge-created note tagging to use exact tag Rem IDs instead of
+  tag names.
+  - `create_note` now accepts `tagRemIds` instead of `tags`.
+  - `append_journal` now accepts optional `tagRemIds`.
+  - Plugin setting `autoTag` was replaced by `autoTagRemId`; users who configured `autoTag` must manually set the new
+    `autoTagRemId` field to the desired tag Rem ID.
+- Improved bridge disconnect diagnostics for incompatible RemNote marketplace plugins by naming the official
+  `MCP/OpenClaw Automation Bridge` plugin in logs and connection UI hints.
+- Expanded setup and troubleshooting documentation for official bridge plugin installs, compatible
+  `remnote-mcp-server` versions, local MCP protocol/version terminology, the bundled `remnote-mcp-stdio` proxy, and
+  end-user validation guidance.
+
+### Fixed
+
+- Hardened bridge write validation so malformed direct bridge payloads cannot clear children, insert at invalid
+  positions, or mutate tags from non-array tag ID inputs.
+
+## [0.14.0] - 2026-05-07
+
+### Changed
+
+- Added local `remnote-mcp-bridge` executable link/unlink workflows for serving the production `dist/` bundle.
+- Documented Chrome/Chromium Local Network Access WebSocket blocking symptoms and workarounds for browser-based
+  RemNote users, with thanks to @awreccan for reporting and helping analyze the issue.
+- Updated architecture and connection docs for the consolidated `remnote-mcp-server` package, including bundled
+  `remnote-cli` command guidance.
+
 ## [0.13.0] - 2026-04-24
 
 ### Added

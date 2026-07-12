@@ -307,7 +307,8 @@ class BridgeRuntimeController implements BridgeRuntime {
           title: payload.title as string | undefined,
           content: payload.content as string | undefined,
           parentId: payload.parentId as string | undefined,
-          tags: payload.tags as string[] | undefined,
+          tagRemIds: payload.tagRemIds as string[] | undefined,
+          asDocument: payload.asDocument as boolean | undefined,
         });
         this.stats = { ...this.stats, created: this.stats.created + 1 };
         this.addHistoryEntry('create', result.titles || ['Note'], result.remIds);
@@ -319,6 +320,7 @@ class BridgeRuntimeController implements BridgeRuntime {
         const result = await this.adapter.appendJournal({
           content: payload.content as string,
           timestamp: payload.timestamp as boolean | undefined,
+          tagRemIds: payload.tagRemIds as string[] | undefined,
         });
         this.stats = { ...this.stats, journal: this.stats.journal + 1 };
         this.addHistoryEntry('journal', result.titles, result.remIds);
@@ -329,11 +331,15 @@ class BridgeRuntimeController implements BridgeRuntime {
       case 'search': {
         const result = await this.adapter.search({
           query: payload.query as string,
+          parentRemId: typeof payload.parentRemId === 'string' ? payload.parentRemId : undefined,
           limit: payload.limit as number | undefined,
-          includeContent: payload.includeContent as 'none' | 'markdown' | 'structured' | undefined,
+          cursor: typeof payload.cursor === 'string' ? payload.cursor : undefined,
+          contentMode: payload.contentMode as 'none' | 'markdown' | 'structured' | undefined,
           depth: payload.depth as number | undefined,
           childLimit: payload.childLimit as number | undefined,
           maxContentLength: payload.maxContentLength as number | undefined,
+          ancestorDepth: payload.ancestorDepth as number | undefined,
+          view: payload.view as 'compact' | 'standard' | 'full' | undefined,
         });
         this.stats = { ...this.stats, searches: this.stats.searches + 1 };
         this.addHistoryEntry('search', [`Search: "${payload.query}"`]);
@@ -343,15 +349,19 @@ class BridgeRuntimeController implements BridgeRuntime {
 
       case 'search_by_tag': {
         const result = await this.adapter.searchByTag({
-          tag: payload.tag as string,
+          tagRemId: payload.tagRemId as string,
+          resultMode: payload.resultMode as 'context' | 'tagged' | undefined,
           limit: payload.limit as number | undefined,
-          includeContent: payload.includeContent as 'none' | 'markdown' | 'structured' | undefined,
+          cursor: typeof payload.cursor === 'string' ? payload.cursor : undefined,
+          contentMode: payload.contentMode as 'none' | 'markdown' | 'structured' | undefined,
           depth: payload.depth as number | undefined,
           childLimit: payload.childLimit as number | undefined,
           maxContentLength: payload.maxContentLength as number | undefined,
+          ancestorDepth: payload.ancestorDepth as number | undefined,
+          view: payload.view as 'compact' | 'standard' | 'full' | undefined,
         });
         this.stats = { ...this.stats, searches: this.stats.searches + 1 };
-        this.addHistoryEntry('search', [`Search by tag: "${payload.tag}"`]);
+        this.addHistoryEntry('search', [`Search by tag Rem ID: "${payload.tagRemId}"`]);
         this.emit();
         return result;
       }
@@ -360,11 +370,25 @@ class BridgeRuntimeController implements BridgeRuntime {
         const result = await this.adapter.readNote({
           remId: payload.remId as string,
           depth: payload.depth as number | undefined,
-          includeContent: payload.includeContent as 'none' | 'markdown' | 'structured' | undefined,
+          contentMode: payload.contentMode as 'none' | 'markdown' | 'structured' | undefined,
           childLimit: payload.childLimit as number | undefined,
           maxContentLength: payload.maxContentLength as number | undefined,
+          ancestorDepth: payload.ancestorDepth as number | undefined,
+          view: payload.view as 'compact' | 'standard' | 'full' | undefined,
         });
         this.addHistoryEntry('read', [result.title], [result.remId]);
+        return result;
+      }
+
+      case 'list_children': {
+        const result = await this.adapter.listChildren({
+          parentRemId: payload.parentRemId as string,
+          limit: payload.limit as number | undefined,
+          cursor: typeof payload.cursor === 'string' ? payload.cursor : undefined,
+          ancestorDepth: payload.ancestorDepth as number | undefined,
+          view: payload.view as 'compact' | 'standard' | 'full' | undefined,
+        });
+        this.addHistoryEntry('read', [`Children of ${payload.parentRemId}`]);
         return result;
       }
 
@@ -384,14 +408,105 @@ class BridgeRuntimeController implements BridgeRuntime {
         const result = await this.adapter.updateNote({
           remId: payload.remId as string,
           title: payload.title as string | undefined,
-          appendContent: payload.appendContent as string | undefined,
-          replaceContent: payload.replaceContent as string | undefined,
-          addTags: payload.addTags as string[] | undefined,
-          removeTags: payload.removeTags as string[] | undefined,
-          addAliases: payload.addAliases as string[] | undefined,
         });
         this.stats = { ...this.stats, updated: this.stats.updated + 1 };
         this.addHistoryEntry('update', result.titles || ['Note updated'], result.remIds);
+        this.emit();
+        return result;
+      }
+
+      case 'set_document_status': {
+        const result = await this.adapter.setDocumentStatus({
+          remId: payload.remId as string,
+          isDocument: payload.isDocument as boolean,
+          dryRun: payload.dryRun as boolean | undefined,
+          expectedOldRemType: payload.expectedOldRemType as
+            | 'document'
+            | 'dailyDocument'
+            | 'concept'
+            | 'descriptor'
+            | 'portal'
+            | 'text'
+            | undefined,
+        });
+        if (result.changed) {
+          this.stats = { ...this.stats, updated: this.stats.updated + 1 };
+          this.addHistoryEntry(
+            'update',
+            [`Document status updated: ${result.title}`],
+            [result.remId]
+          );
+          this.emit();
+        }
+        return result;
+      }
+
+      case 'insert_children': {
+        const result = await this.adapter.insertChildren({
+          parentRemId: payload.parentRemId as string,
+          content: payload.content as string,
+          position: payload.position as 'first' | 'last' | 'before' | 'after',
+          siblingRemId: payload.siblingRemId as string | undefined,
+        });
+        this.stats = { ...this.stats, updated: this.stats.updated + 1 };
+        this.addHistoryEntry('create', result.titles || ['Children inserted'], result.remIds);
+        this.emit();
+        return result;
+      }
+
+      case 'move_note': {
+        const result = await this.adapter.moveNote({
+          remId: payload.remId as string,
+          newParentRemId: payload.newParentRemId as string,
+          position: payload.position as 'first' | 'last' | 'before' | 'after' | undefined,
+          siblingRemId: payload.siblingRemId as string | undefined,
+          dryRun: payload.dryRun as boolean | undefined,
+          expectedOldParentRemId: payload.expectedOldParentRemId as string | undefined,
+          ancestorDepth: payload.ancestorDepth as number | undefined,
+        });
+        if (!result.dryRun) {
+          this.stats = { ...this.stats, updated: this.stats.updated + 1 };
+          this.addHistoryEntry('update', [`Moved ${result.title}`], [result.remId]);
+          this.emit();
+        }
+        return result;
+      }
+
+      case 'replace_children': {
+        const result = await this.adapter.replaceChildren({
+          parentRemId: payload.parentRemId as string,
+          content: payload.content as string,
+        });
+        this.stats = { ...this.stats, updated: this.stats.updated + 1 };
+        this.addHistoryEntry('update', result.titles || ['Children replaced'], result.remIds);
+        this.emit();
+        return result;
+      }
+
+      case 'update_tags': {
+        const result = await this.adapter.updateTags({
+          remId: payload.remId as string,
+          addTagRemIds: payload.addTagRemIds as string[] | undefined,
+          removeTagRemIds: payload.removeTagRemIds as string[] | undefined,
+        });
+        this.stats = { ...this.stats, updated: this.stats.updated + 1 };
+        this.addHistoryEntry('update', ['Tags updated'], result.remIds);
+        this.emit();
+        return result;
+      }
+
+      case 'set_property': {
+        const result = await this.adapter.setProperty({
+          remId: payload.remId as string,
+          tagRemId: payload.tagRemId as string,
+          propertyRemId: payload.propertyRemId as string,
+          value: payload.value as
+            | { kind: 'text'; text: string }
+            | { kind: 'rem_reference'; remId: string }
+            | { kind: 'clear' },
+        });
+        this.stats = { ...this.stats, updated: this.stats.updated + 1 };
+        this.addHistoryEntry('update', ['Property updated'], [result.remId]);
         this.emit();
         return result;
       }

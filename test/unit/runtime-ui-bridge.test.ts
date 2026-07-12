@@ -8,6 +8,9 @@ import {
   registerBridgeRuntimeUiBridge,
 } from '../../src/widgets/runtime-ui-bridge';
 
+const TEST_BRIDGE_VERSION = '1.2.3';
+const TEST_COMPANION_VERSION = '4.5.6';
+
 describe('registerBridgeRuntimeUiBridge', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -19,17 +22,18 @@ describe('registerBridgeRuntimeUiBridge', () => {
     const snapshot: BridgeRuntimeSnapshot = {
       status: 'connected',
       retryPhase: 'idle',
-      bridgeVersion: '0.13.0',
+      bridgeVersion: TEST_BRIDGE_VERSION,
       installMode: 'development',
       companion: {
         kind: 'cli',
-        version: '0.13.0',
+        version: TEST_COMPANION_VERSION,
       },
       wsUrl: 'ws://127.0.0.1:3002',
       logs: [{ timestamp: logTimestamp, message: 'Connected', level: 'success' }],
       stats: { created: 1, updated: 2, journal: 3, searches: 4 },
       history: [
         {
+          id: 'history-1',
           timestamp: new Date('2026-03-17T17:31:00.000Z'),
           action: 'create',
           titles: ['Test note'],
@@ -69,11 +73,14 @@ describe('registerBridgeRuntimeUiBridge', () => {
 
     const persistedSnapshot = await plugin.storage.getSession(BRIDGE_UI_SNAPSHOT_STORAGE_KEY);
     expect(isSerializedBridgeRuntimeSnapshot(persistedSnapshot)).toBe(true);
-    expect(persistedSnapshot?.wsUrl).toBe('ws://127.0.0.1:3002');
-    expect(persistedSnapshot?.installMode).toBe('development');
-    expect(persistedSnapshot?.companion?.kind).toBe('cli');
-    expect(persistedSnapshot?.logs[0]?.timestamp).toBe(logTimestamp.getTime());
-    expect(persistedSnapshot?.retryPhase).toBe('standby');
+    if (!isSerializedBridgeRuntimeSnapshot(persistedSnapshot)) {
+      throw new Error('expected serialized bridge runtime snapshot');
+    }
+    expect(persistedSnapshot.wsUrl).toBe('ws://127.0.0.1:3002');
+    expect(persistedSnapshot.installMode).toBe('development');
+    expect(persistedSnapshot.companion?.kind).toBe('cli');
+    expect(persistedSnapshot.logs[0]?.timestamp).toBe(logTimestamp.getTime());
+    expect(persistedSnapshot.retryPhase).toBe('standby');
   });
 
   it('routes widget commands from storage to the runtime', async () => {
@@ -88,7 +95,7 @@ describe('registerBridgeRuntimeUiBridge', () => {
         getSnapshot: () => ({
           status: 'disconnected',
           retryPhase: 'idle',
-          bridgeVersion: '0.13.0',
+          bridgeVersion: TEST_BRIDGE_VERSION,
           installMode: 'marketplace',
           wsUrl: 'ws://127.0.0.1:3002',
           logs: [],

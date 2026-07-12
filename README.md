@@ -1,65 +1,66 @@
-# MCP Automation Bridge CC52
-
-> **Attribution / 来源声明**
->
-> This repository is a personal-use mirror / derivative build of the upstream open-source project
-> [`robert7/remnote-mcp-bridge`](https://github.com/robert7/remnote-mcp-bridge), originally authored by Robert Spiegel and licensed under the MIT License.
->
-> 本仓库是基于上游开源项目 [`robert7/remnote-mcp-bridge`](https://github.com/robert7/remnote-mcp-bridge) 的个人自用镜像/派生构建，原作者为 Robert Spiegel，遵循原项目 MIT License。
->
-> Purpose / 用途：only to provide a public `repoUrl` and a custom RemNote plugin ID (`remnote-mcp-bridge-cc52`) for personal local installation, because RemNote kept stale cache for the original plugin ID. This repository is **not** an attempt to claim authorship or redistribute as an independent product.
->
-> 用途仅限：为个人本地安装提供公开 `repoUrl` 与自定义 RemNote 插件 ID（`remnote-mcp-bridge-cc52`），以绕过 RemNote 对原插件 ID 的缓存冲突。本仓库**不主张原创，也不作为独立产品重新发布**。
->
-> Upstream / 上游项目：https://github.com/robert7/remnote-mcp-bridge
-
----
-
 # RemNote Automation Bridge
 
 A RemNote plugin that exposes your RemNote knowledge base to external automation clients over a local WebSocket
-bridge. It is the shared RemNote endpoint for two first-class companion paths:
+bridge. It is the shared RemNote endpoint for the `remnote-mcp-server` package:
 
 - **[RemNote MCP Server](https://github.com/robert7/remnote-mcp-server)** for MCP-compatible AI assistants
-- **[RemNote CLI](https://github.com/robert7/remnote-cli)** for scripts, local agents, and CLI-first workflows
+- **`remnote-mcp-stdio` bundled in remnote-mcp-server** for stdio-only MCP clients
+- **`remnote-cli` bundled in remnote-mcp-server** for scripts, local agents, and CLI-first workflows
 
-![License](https://img.shields.io/badge/license-MIT-blue)
-![CI](https://github.com/robert7/remnote-mcp-bridge/actions/workflows/ci.yml/badge.svg)
-[![codecov](https://codecov.io/gh/robert7/remnote-mcp-bridge/branch/main/graph/badge.svg)](https://codecov.io/gh/robert7/remnote-mcp-bridge)
-
-> If you run into any issues, please [report them here](https://github.com/robert7/remnote-mcp-bridge/issues).
-> Further it is an improved and renamed fork of the original plugin
-> [MCP Bridge plugin by Quentin Tousart](https://github.com/quentintou/remnote-mcp-bridge).
+> **Connection issue? Check the RemNote bridge plugin and server versions first.** Use the official
+> **MCP/OpenClaw Automation Bridge** by Robert Spiegel in RemNote, and run a compatible `remnote-mcp-server` on the same
+> `0.x` minor line. Wrong plugin flavors or mismatched versions can disconnect with a `1008` compatibility message.
+> If Marketplace and npm releases are temporarily out of
+> sync, pin the matching server package or run matching bridge/server checkouts from source. Start with the
+> [version compatibility guide](docs/guides/bridge-consumer-version-compatibility.md),
+> [Marketplace plugin install guide](docs/guides/install-plugin-via-marketplace-beginner.md),
+> [local plugin guide](docs/guides/development-run-plugin-locally.md), and
+> [server installation guide](https://github.com/robert7/remnote-mcp-server/blob/main/docs/guides/installation.md).
+> After setup, see the
+> [agent validation prompts](https://github.com/robert7/remnote-mcp-server/blob/main/docs/agent-validation-prompts/README.md)
+> to verify that your chosen AI agent can use the installed RemNote MCP tools end to end.
+> If the guides do not resolve your problem, [open an issue](https://github.com/robert7/remnote-mcp-bridge/issues)
+> with the relevant versions, setup path, observed behavior, and exact error/status message.
 
 ## Integration Paths
 
-This project is a bridge layer with two consumer paths:
+This project is a bridge layer with two consumer paths, both served by the `remnote-mcp-server` package:
 
 1. **MCP Server path:**
    - **RemNote Automation Bridge** (this project): RemNote plugin exposing RemNote API via WebSocket
    - **[RemNote MCP Server](https://github.com/robert7/remnote-mcp-server)**: companion server exposing MCP tools to AI
      assistants
-   - Demo: **[View MCP Server Demo →](https://github.com/robert7/remnote-mcp-server/blob/main/docs/demo.md)**
+   - **`remnote-mcp-stdio`**: optional stdio-to-HTTP proxy for MCP clients that cannot use Streamable HTTP directly
+   - Demo: **[MCP Server Demo and Screenshots](https://github.com/robert7/remnote-mcp-server/blob/main/docs/demo.md)** · **[Advanced Use Cases](https://github.com/robert7/remnote-mcp-server/blob/main/docs/advanced-use-cases.md)**
 2. **CLI app path (e.g. for OpenClaw):**
    - This bridge plugin remains the RemNote endpoint
-   - **[RemNote CLI](https://github.com/robert7/remnote-cli)**: companion app for integrating RemNote with OpenClaw and
-     other agentic workflows via the same WebSocket bridge
-   - Demo: **[View RemNote CLI Demo →](https://github.com/robert7/remnote-cli/blob/main/docs/demo.md)**
+   - **[RemNote MCP Server](https://github.com/robert7/remnote-mcp-server)**: the single local server connected to the
+     bridge
+   - **`remnote-cli`**: command-line MCP client bundled in `remnote-mcp-server` for OpenClaw and other agentic workflows
+   - Demo: **[RemNote CLI Demo and Screenshots](https://github.com/robert7/remnote-mcp-server/blob/main/docs/demo.md#remnote-cli)**
 
-**For both paths always 2 components are required - the bridge and either the MCP server or the CLI app.**
+**For both paths the required server component is `remnote-mcp-server`; `remnote-mcp-stdio` and `remnote-cli` are
+optional proxy/client commands for that server.**
 
-| Companion            | Best fit                                      | Typical client                                              |
-| -------------------- | --------------------------------------------- | ----------------------------------------------------------- |
-| `remnote-mcp-server` | Conversational AI tool use via MCP            | Claude Code, ChatGPT Apps, Claude Cowork, other MCP clients |
-| `remnote-cli`        | Local automation and command-driven workflows | OpenClaw, shell scripts, local agents                       |
+| Companion             | Best fit                                                   | Typical client                                              |
+| --------------------- | ---------------------------------------------------------- | ----------------------------------------------------------- |
+| `remnote-mcp-server`  | Conversational AI tool use via MCP over HTTP               | Claude Code, ChatGPT Apps, Claude Cowork, other MCP clients |
+| `remnote-mcp-stdio`   | Stdio-only MCP clients needing a local proxy               | Codex stdio setups, MCP clients without HTTP transport      |
+| `remnote-cli`         | Lightweight local automation and command-driven workflows  | OpenClaw, coding harnesses, shell scripts, local agents     |
 
-**Version compatibility warning (`0.x` semver):** install a server/CLI version that matches your installed bridge
-plugin version (prefer the same minor line). See the [Bridge / Consumer Version Compatibility Guide](docs/guides/bridge-consumer-version-compatibility.md).
+**Version compatibility warning (`0.x` semver):** install a `remnote-mcp-server` version that matches your installed
+bridge plugin version (prefer the same minor line). See the [Bridge / Consumer Version Compatibility Guide](docs/guides/bridge-consumer-version-compatibility.md).
+
+**MCP protocol note:** `protocolVersion` values such as `2025-11-25` are MCP protocol negotiation versions from the MCP
+SDK, not bridge/server package versions. Current `remnote-mcp-server` builds support `2025-11-25`; a Claude Desktop
+initialize timeout usually points to configuration or reachability rather than that version number. For local Claude
+Desktop, prefer the
+[Local MCPB guide](https://github.com/robert7/remnote-mcp-server/blob/main/docs/guides/configuration-claude-desktop-local-mcpb.md).
 
 ## Why This Bridge Exists
 
 RemNote plugins cannot be called directly by external automation clients. This bridge provides one stable local
-connection point that both companion apps can target:
+connection point that the server package can target:
 
 - **MCP path** when you want AI assistants to call RemNote tools through [Model Context Protocol](https://modelcontextprotocol.io/)
 - **CLI path** when you want shell commands, scripts, or local agents to access the same bridge surface
@@ -71,13 +72,13 @@ connection point that both companion apps can target:
 - **Create Notes & Flashcards** - Create simple notes, hierarchical markdown trees, or RemNote-native flashcards
 - **Search Knowledge Base** - Full-text search across your Rems, plus tag-based search with ancestor context
 - **Read Notes** - Read notes with tags plus markdown or structured child content for follow-up navigation
-- **Update Notes** - Rename notes, append or replace hierarchical content, and manage tags
-- **Daily Journal** - Append entries to today's daily document, including hierarchical markdown content
+- **Update Notes** - Rename notes, insert or replace hierarchical content, and manage tags by exact Rem ID
+- **Daily Journal** - Append entries to today's daily document, including hierarchical markdown content and optional exact tag Rem IDs
 
 ### Plugin Features
 
 - **Sidebar Control Panel** - Monitor Automation Bridge connection status, statistics, and action history
-- **Auto-tagging** - Automatically tag notes created via Automation Bridge actions (configurable)
+- **Auto-tagging** - Automatically tag notes created via Automation Bridge actions with an exact tag Rem ID
 - **Session Statistics** - Track created/updated/journal entries/searches
 - **Action History** - View last 10 bridge actions with timestamps
 - **Configurable Settings** - Customize behavior through RemNote settings
@@ -85,23 +86,23 @@ connection point that both companion apps can target:
 
 ## Data Privacy
 
-The bridge itself only talks to a local WebSocket companion process (default: `ws://127.0.0.1:3002`).
-Connection direction is **Bridge Plugin -> Companion App**, not the other way around.
+The bridge itself only talks to a local `remnote-mcp-server` WebSocket endpoint (default:
+`ws://127.0.0.1:3002`). Connection direction is **Bridge Plugin -> remnote-mcp-server**, not the other way around.
 
 Supported data flows:
 
 - **MCP path:** `RemNote ↔ Bridge Plugin ↔ Local MCP Server ↔ AI Assistant`
-- **CLI path:** `RemNote ↔ Bridge Plugin ↔ Local CLI Daemon ↔ CLI / Local Agents`
+- **CLI path:** `RemNote ↔ Bridge Plugin ↔ Local MCP Server ↔ RemNote CLI ↔ Local Agents`
 
 What this means in practice:
 
 - **The plugin itself does NOT send data to external servers**
-- Any external sharing happens in the chosen companion path, not in the bridge plugin itself
+- Any external sharing happens in the chosen MCP client or local automation path, not in the bridge plugin itself
 - For the MCP path, your AI assistant only sees the data forwarded through your local MCP server setup
-- For the CLI path, data stays within your local CLI/daemon workflow unless your own scripts or agents forward it
+- For the CLI path, data stays within your local MCP-server/CLI workflow unless your own scripts or agents forward it
 
 Why this works that way: RemNote plugins do not have a hosted backend API, so the bridge must connect outward from the
-RemNote frontend plugin to the local companion process. See the [Connection Lifecycle
+RemNote frontend plugin to the local server process. See the [Connection Lifecycle
 Guide](docs/guides/connection-lifecycle.md) and the official RemNote [Backend Plugins](https://plugins.remnote.com/advanced/backend_plugins)
 page.
 
@@ -125,6 +126,9 @@ optionally open the control panel to inspect status and logs:
 - Look for the **Automation Bridge** icon in RemNote's right sidebar toolbar
 - Click the icon to open the Automation Bridge panel
 
+If the panel disconnects immediately or shows a `1008` compatibility message, verify that RemNote has the official
+**MCP/OpenClaw Automation Bridge** plugin installed and not a similarly named marketplace fork or older flavor.
+
 The sidebar panel is no longer required to create the connection. It is a monitoring and manual-control surface for the
 background bridge runtime.
 
@@ -137,7 +141,8 @@ Related setup/testing guides:
 
 ### 2. Choose Your Companion Path
 
-**Important:** the plugin alone is not sufficient. You also need one companion app:
+**Important:** the plugin alone is not sufficient. You need the MCP server. The CLI is an additional client for local
+automation workflows.
 
 #### MCP server path
 
@@ -153,30 +158,30 @@ configuration, and troubleshooting.
 
 #### CLI path
 
-Use **[RemNote CLI](https://github.com/robert7/remnote-cli)** when you want shell commands, OpenClaw, or other local
-agent workflows to access the same bridge.
+Use the `remnote-cli` command bundled with **[RemNote MCP Server](https://github.com/robert7/remnote-mcp-server)**
+when you want shell commands, OpenClaw, or other local agent workflows to access the same bridge.
 
 ```bash
-npm install -g remnote-cli
+npm uninstall -g remnote-cli
+npm install -g remnote-mcp-server
 ```
 
-See the **[RemNote CLI repository](https://github.com/robert7/remnote-cli)** for installation, command reference, and
-workflow examples.
+See the **[RemNote MCP Server repository](https://github.com/robert7/remnote-mcp-server)** for installation, command
+reference, and workflow examples.
 
-> **Version compatibility (important):** before installing/upgrading the MCP server or CLI companion, check the
+> **Version compatibility (important):** before installing/upgrading the MCP server package, check the
 > [Bridge / Consumer Version Compatibility Guide](docs/guides/bridge-consumer-version-compatibility.md).
 
 ### Recommended Startup Order
 
-1. Start the companion process first:
-   - `remnote-mcp-server` for the MCP path
-   - `remnote-cli daemon start` for the CLI path
+1. Start the local server process first:
+   - `remnote-mcp-server`
 2. Open RemNote.
 3. Wait for the bridge to connect in the background, or open the Automation Bridge panel if you want to confirm
    status.
 4. Only then start using your MCP client or `remnote-cli` commands.
 
-If RemNote was already open before the companion process started, the bridge keeps retrying automatically. You can
+If RemNote was already open before the local server process started, the bridge keeps retrying automatically. You can
 click **Reconnect Now** for an immediate retry. The sidebar also shows whether the bridge is still in the quick retry
 window or already in standby background retry mode.
 
@@ -188,11 +193,11 @@ Guide](docs/guides/connection-lifecycle.md).
 
 ### Single Connection
 
-The system enforces a **single RemNote plugin connection** to one companion process at a time. This means:
+The system enforces a **single RemNote plugin connection** to one local server process at a time. This means:
 
 - The bridge plugin connects to one local WebSocket endpoint
-- You should run either the MCP server path or the CLI daemon path against a given RemNote app instance
-- On the MCP path, multiple AI assistants can still share that one bridge connection through the MCP server's own
+- `remnote-mcp-server` is the supported local WebSocket companion for both MCP clients and `remnote-cli`
+- Multiple AI assistants and CLI commands can share that one bridge connection through the MCP server's own
   multi-client transport
 - This is a RemNote plugin limitation, not a limitation specific to the MCP server or CLI
 
@@ -205,30 +210,33 @@ Access plugin settings in RemNote via **Settings > Plugins > Automation Bridge (
 
 | Setting                  | Description                                                          | Default               |
 | ------------------------ | -------------------------------------------------------------------- | --------------------- |
-| Accept write operations  | Allow write actions (`create_note`, `update_note`, `append_journal`) | `true`                |
-| Accept replace operation | Allow destructive `update_note` replace operations                   | `false`               |
-| Auto-tag created notes   | Add a tag to notes created via bridge actions                        | `true`                |
-| Auto-tag name            | Tag name for auto-tagged created notes                               | ``                    |
-| Journal entry prefix     | Optional prefix for journal entries                                  | ``                    |
-| Add timestamp to journal | Include time in journal entries                                      | `true`                |
-| WebSocket server URL     | Automation bridge server connection URL                              | `ws://127.0.0.1:3002` |
-| Default parent Rem ID    | Parent for new notes (empty = root)                                  | ``                    |
+| Accept write operations  | Allow write actions (`create_note`, `update_note`, `append_journal`)       | `true`                |
+| Accept replace operation | Allow destructive child replacement actions                               | `false`               |
+| Auto-tag created notes   | Add a tag to notes created via bridge actions                              | `true`                |
+| Auto-tag Rem ID          | Exact tag Rem ID for auto-tagged created notes; tag names are not accepted | ``                    |
+| Journal entry prefix     | Optional prefix for journal entries                                        | ``                    |
+| Add timestamp to journal | Include time in journal entries                                            | `true`                |
+| WebSocket server URL     | Automation bridge server connection URL                                    | `ws://127.0.0.1:3002` |
+| Default parent Rem ID    | Parent for new notes (empty = root)                                        | ``                    |
 
 ## Bridge Action Surface
 
 The bridge exposes this shared action surface to companion clients. The MCP server maps these actions to MCP tools, and
 the CLI maps them to commands:
 
-| Action           | Description                                                                       |
-| ---------------- | --------------------------------------------------------------------------------- |
-| `create_note`    | Create notes, markdown trees, or flashcards with title, content, parent, and tags |
-| `search`         | Search the knowledge base with query, filters, and note metadata (including tags) |
-| `search_by_tag`  | Search by tag with ancestor context and content controls                          |
-| `read_note`      | Read a note's metadata, tags, and content in markdown or structured form by ID    |
-| `update_note`    | Update title, append or replace content, add/remove tags, add aliases             |
-| `append_journal` | Add hierarchical markdown content to today's daily document                       |
-| `read_table`     | Read Advanced Table columns, rows, and typed property metadata                    |
-| `get_status`     | Check connection status                                                           |
+| Action             | Description                                                                 |
+| ------------------ | --------------------------------------------------------------------------- |
+| `create_note`      | Create notes, markdown trees, or flashcards with optional exact tag Rem IDs |
+| `search`           | Search the knowledge base with query, filters, and tag ID/name metadata     |
+| `search_by_tag`    | Search by exact tag Rem ID with ancestor context and content controls       |
+| `read_note`        | Read a note's metadata, tags, and content in markdown or structured form    |
+| `update_note`      | Update note title                                                           |
+| `insert_children`  | Insert child Rems at deterministic positions                                |
+| `replace_children` | Replace direct children when destructive replacement is enabled             |
+| `update_tags`      | Add or remove tags by exact tag Rem ID                                      |
+| `append_journal`   | Add markdown content to today's daily document with optional tag Rem IDs    |
+| `read_table`       | Read Advanced Table columns, rows, and typed property metadata              |
+| `get_status`       | Check connection status                                                     |
 
 ## Usage
 
@@ -252,7 +260,7 @@ The sidebar panel provides persistent monitoring of bridge connection and activi
 
 ### Example Interactions
 
-Once everything is connected, you can use either companion path:
+Once everything is connected, you can use either access path:
 
 - **MCP path:** _Create a note about the meeting we just had_
 - **MCP path:** _Find all my notes tagged with "Ideas" and summarize them_
@@ -262,18 +270,19 @@ Once everything is connected, you can use either companion path:
 ## Architecture
 
 ```text
-MCP clients / AI assistants ↔ MCP Server (HTTP) ┐
-                                                ├─ WebSocket :3002 ↔ RemNote Plugin (this repo) ↔ RemNote SDK
-CLI commands / local agents ↔ CLI Daemon (HTTP) ┘
+MCP clients / AI assistants -> MCP Server (HTTP) -> WebSocket :3002 -> RemNote Plugin (this repo) -> RemNote SDK
+stdio MCP clients -> remnote-mcp-stdio -> MCP Server (HTTP) -> WebSocket :3002 -> RemNote Plugin -> RemNote SDK
+CLI commands / local agents -> RemNote CLI -> MCP Server (HTTP) -> WebSocket :3002 -> RemNote Plugin -> RemNote SDK
 ```
 
 **Component roles:**
 
 - **RemNote Automation Bridge** (this repository) - RemNote plugin that executes bridge actions via the RemNote SDK
 - **RemNote MCP Server** ([separate repository](https://github.com/robert7/remnote-mcp-server)) - Exposes bridge
-  actions to MCP-compatible AI assistants
-- **RemNote CLI** ([separate repository](https://github.com/robert7/remnote-cli)) - Exposes the same bridge actions as
-  local commands and daemon-backed automation
+  actions to MCP-compatible AI assistants and CLI clients
+- **remnote-mcp-stdio** (bundled in the server package) - Proxies stdio MCP clients to the local MCP server
+- **remnote-cli** (bundled in the server package) - Exposes the same bridge actions as local commands by calling the
+  MCP server
 
 ## RemNote Concept Reference (for Contributors and Agents)
 
@@ -305,6 +314,15 @@ npm run dev
 # Run production bundle locally (no zip, no hot reload)
 ./run-prod-build.sh
 
+# Link the production bundle server as remnote-mcp-bridge
+./link-cli.sh
+
+# Serve linked production dist/ at http://127.0.0.1:8080
+remnote-mcp-bridge
+
+# Remove the local remnote-mcp-bridge npm link
+./unlink-cli.sh
+
 # Build for production
 npm run build
 
@@ -329,6 +347,10 @@ npm run build
 
 3. **Restart RemNote** after changing settings
 
+4. **If using RemNote in a Chromium-based browser, not the desktop app:** Chrome 147+ can block the marketplace plugin
+   iframe from connecting to `ws://127.0.0.1:3002`; see
+   [Chrome Local Network Access troubleshooting](docs/guides/connection-lifecycle.md#chrome-local-network-access-can-block-browser-websockets).
+
 **"Invalid event setCustomCSS" errors:**
 
 - Currently observed in hot-reload development runs (`npm run dev` or `./run-dev.sh`)
@@ -349,7 +371,7 @@ documentation](https://github.com/robert7/remnote-mcp-server#troubleshooting)**.
 
 ## Contributing
 
-Contributions are welcome, but pull requests in this repo are expected to follow the shared bridge/server/CLI process.
+Contributions are welcome, but pull requests in this repo are expected to follow the shared bridge/server process.
 
 Read the [Pull Request Guide](docs/guides/pull-request-guide.md) before opening or updating a PR.
 
@@ -357,11 +379,11 @@ In particular:
 
 - update all relevant documentation
 - update tests and extend integration coverage when the external surface changes
-- keep `remnote-mcp-server` and `remnote-cli` in parity when protocol or shared functionality changes
+- keep MCP tools and the bundled `remnote-cli` in parity when protocol or shared functionality changes
 - merge the latest target `master` into your source branch before opening or updating the PR
 
-For the canonical workflow for updating and running shared MCP server + CLI integration coverage, see the [Integration
-Testing Guide](https://github.com/robert7/remnote-mcp-server/blob/main/docs/guides/integration-testing.md).
+For the shared bridge/server testing model, see the
+[Testing Strategy](https://github.com/robert7/remnote-mcp-server/blob/main/docs/guides/testing-strategy.md).
 
 ## License
 
@@ -372,3 +394,9 @@ MIT License - see [LICENSE](LICENSE) for details.
 - [RemNote](https://remnote.com) for the amazing Personal Knowledge Management tool
 - [Anthropic](https://anthropic.com) for Claude and the MCP protocol
 - The RemNote plugin community for inspiration
+
+## Badges
+
+![License](https://img.shields.io/badge/license-MIT-blue)
+![CI](https://github.com/robert7/remnote-mcp-bridge/actions/workflows/ci.yml/badge.svg)
+[![codecov](https://codecov.io/gh/robert7/remnote-mcp-bridge/branch/main/graph/badge.svg)](https://codecov.io/gh/robert7/remnote-mcp-bridge)

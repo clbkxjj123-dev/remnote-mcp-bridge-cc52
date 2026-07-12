@@ -14,6 +14,8 @@ import { wait } from '../helpers/test-server';
 // Mock WebSocket globally
 global.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 
+const TEST_COMPANION_VERSION = '1.2.3';
+
 describe('WebSocketClient', () => {
   let client: WebSocketClient;
   let statusChanges: ConnectionStatus[] = [];
@@ -159,16 +161,18 @@ describe('WebSocketClient', () => {
       await wait(10);
 
       const ws = (client as unknown as { ws: MockWebSocket }).ws;
-      ws.simulateMessage({ type: 'companion_info', kind: 'cli', version: '0.13.0' });
+      ws.simulateMessage({ type: 'companion_info', kind: 'cli', version: TEST_COMPANION_VERSION });
       await wait(10);
 
       expect(companionInfoChanges.at(-1)).toEqual({
         kind: 'cli',
-        version: '0.13.0',
+        version: TEST_COMPANION_VERSION,
       });
-      expect(logs.some((log) => log.message.includes('Companion identified: cli v0.13.0'))).toBe(
-        true
-      );
+      expect(
+        logs.some((log) =>
+          log.message.includes(`Companion identified: cli v${TEST_COMPANION_VERSION}`)
+        )
+      ).toBe(true);
     });
 
     it('should handle request messages with success', async () => {
@@ -264,6 +268,21 @@ describe('WebSocketClient', () => {
       expect(client.getReconnectMetadata().nextRetryAt).toBeDefined();
       expect(client.getReconnectMetadata().lastDisconnectReason).toBe('1006 Connection lost');
       expect(companionInfoChanges.at(-1)).toBeUndefined();
+    });
+
+    it('should explain bridge compatibility policy disconnects', async () => {
+      client.connect();
+      await wait(10);
+
+      const ws = (client as unknown as { ws: MockWebSocket }).ws;
+      ws.close(1008, 'Bridge hello timeout');
+
+      expect(client.getReconnectMetadata().lastDisconnectReason).toBe(
+        '1008 Wrong/incompatible RemNote plugin installed. Install MCP/OpenClaw Automation Bridge 0.5.x.'
+      );
+      expect(
+        logs.some((log) => log.message.includes('Install MCP/OpenClaw Automation Bridge 0.5.x'))
+      ).toBe(true);
     });
 
     it('should enter standby reconnect mode after burst attempts are exhausted', async () => {
