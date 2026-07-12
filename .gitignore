@@ -9,3 +9,5 @@ dist-ssr
 coverage
 tmp
 .clawpatch
+# cc52: live bridge test artifacts
+scripts/cc52-live-test-results-*.json

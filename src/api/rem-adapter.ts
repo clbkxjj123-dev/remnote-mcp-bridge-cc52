@@ -3204,9 +3204,7 @@ export class RemAdapter {
       }
       const frontText = await this.buildRichTextFromTokens(params.richText);
       if (frontText) {
-        await this.runInTransaction(async () => {
-          await rem.setText(frontText);
-        });
+        await rem.setText(frontText);
         titles.push(`[front] ${this.describeRichTextTokens(params.richText)}`);
         remIds.push(remId);
       }
@@ -3216,44 +3214,38 @@ export class RemAdapter {
     if (params.richTextBack && Array.isArray(params.richTextBack) && params.richTextBack.length > 0) {
       const backText = await this.buildRichTextFromTokens(params.richTextBack);
       if (backText) {
-        await this.runInTransaction(async () => {
-          await rem.setBackText(backText);
-        });
+        await rem.setBackText(backText);
         titles.push(`[back] ${this.describeRichTextTokens(params.richTextBack)}`);
         remIds.push(remId);
       }
     }
 
     // Replace content by clearing all direct children first, then adding new child lines.
+    // Deliberately NOT wrapped in runInTransaction: live testing showed markdown
+    // tree creation hangs inside a transaction in update_note (the pre-fork build
+    // ran these paths transaction-free in production without issues).
     if (params.replaceContent !== undefined) {
       const replaceContent = this.requireString(params.replaceContent, 'replaceContent');
       const normalizedContent = this.normalizeContent(replaceContent);
-      const preparedContent = normalizedContent
-        ? await this.prepareMarkdownIdReferenceTokens(normalizedContent)
-        : undefined;
-
-      const results = await this.runInTransaction(async () => {
-        await this.clearDirectChildren(rem);
-        if (preparedContent) {
-          const createdRems = await this.createRemsFromPreparedMarkdown(preparedContent, rem._id);
-          if (createdRems.length > 0) {
-            return await this.extractRemResults(createdRems);
-          }
+      await this.clearDirectChildren(rem);
+      if (normalizedContent) {
+        const preparedContent = await this.prepareMarkdownIdReferenceTokens(normalizedContent);
+        const createdRems = await this.createRemsFromPreparedMarkdown(preparedContent, rem._id);
+        if (createdRems.length > 0) {
+          const results = await this.extractRemResults(createdRems);
+          remIds.push(...results.remIds);
+          titles.push(...results.titles);
         }
-        return { titles: [], remIds: [] };
-      });
-      remIds.push(...results.remIds);
-      titles.push(...results.titles);
+      }
     }
 
-    // Append content as new direct children.
+    // Append content as new direct children (transaction-free, see note above).
     if (params.appendContent !== undefined) {
       const appendContent = this.requireString(params.appendContent, 'appendContent');
       const normalizedContent = this.normalizeContent(appendContent);
       if (normalizedContent) {
-        const createdRems = await this.runInTransaction(async () => {
-          return await this.createRemsFromMarkdown(normalizedContent, rem._id);
-        });
+        const preparedContent = await this.prepareMarkdownIdReferenceTokens(normalizedContent);
+        const createdRems = await this.createRemsFromPreparedMarkdown(preparedContent, rem._id);
         if (createdRems.length > 0) {
           const results = await this.extractRemResults(createdRems);
           remIds.push(...results.remIds);
