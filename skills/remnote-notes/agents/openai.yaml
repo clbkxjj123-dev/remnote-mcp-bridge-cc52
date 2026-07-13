@@ -1,0 +1,4 @@
+interface:
+  display_name: "RemNote 主动回忆笔记"
+  short_description: "将学习材料转为来源忠实、可粘贴的 RemNote 闪卡"
+  default_prompt: "Use $remnote-notes to convert this learning material into concise, source-faithful RemNote notes and flashcards."
