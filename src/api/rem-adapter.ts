@@ -81,15 +81,19 @@ export interface ReadNoteParams {
  * Allows composing a Rem's front/back text from plain text and exact Rem references.
  */
 export interface UpdateNoteRichTextToken {
-  type: 'text' | 'rem';
+  type: 'text' | 'rem' | 'image' | 'link' | 'code';
   value?: string;
   remId?: string;
+  url?: string;
+  width?: number;
+  height?: number;
+  language?: string;
 }
 
 /**
  * cc52 fork: update_note keeps the pre-0.17 rich parameter set (appendContent,
  * replaceContent, addTags, removeTags) for backward compatibility with existing
- * bridge consumers, plus custom write extensions (addAliases, mergeFromRemId,
+ * bridge consumers, plus custom write extensions (addAliases, removeAliases, mergeFromRemId,
  * richText/richTextBack, setParentId, setIsDocument, setIsFolder, removeAfter).
  * The dedicated upstream actions (insert_children, replace_children, update_tags,
  * move_note, set_document_status) remain available and are preferred for new consumers.
@@ -102,9 +106,12 @@ export interface UpdateNoteParams {
   addTags?: string[];
   removeTags?: string[];
   addAliases?: string[];
+  removeAliases?: string[];
   mergeFromRemId?: string;
   richText?: UpdateNoteRichTextToken[];
   richTextBack?: UpdateNoteRichTextToken[];
+  frontCardHint?: string;
+  backCardHint?: string;
   setParentId?: string;
   setIsDocument?: boolean;
   setIsFolder?: boolean;
@@ -204,6 +211,42 @@ export interface ReadTableResult {
   rowsReturned: number;
 }
 
+export interface ManagePortalParams {
+  operation: 'create' | 'add' | 'remove' | 'read';
+  portalRemId?: string;
+  remId?: string;
+  title?: string;
+  parentRemId?: string;
+}
+
+export interface CreateTableParams {
+  title: string;
+  parentRemId?: string;
+  columns: Array<{ name: string; type?: string }>;
+}
+
+export interface CreateTableRowParams {
+  tableRemId: string;
+  title: string;
+  parentRemId?: string;
+  values?: Record<string, SetPropertyValue>;
+}
+
+export interface SetRemFeaturesParams {
+  remId: string;
+  todoStatus?: 'todo' | 'finished' | 'clear';
+  codeLanguage?: string | null;
+  isQuote?: boolean;
+  isListItem?: boolean;
+  templateRemId?: string | null;
+}
+
+export interface CreateLinkRemParams {
+  url: string;
+  title?: string;
+  parentRemId?: string;
+}
+
 export interface ContentProperties {
   childrenRendered: number;
   childrenTotal: number;
@@ -214,6 +257,20 @@ export interface InlineReference {
   text: string;
   targetRemId: string;
   kind: 'rem';
+}
+
+export interface RichContentMetadata {
+  images: Array<{ url: string; width?: number; height?: number }>;
+  links: Array<{ text: string; url: string }>;
+  code: Array<{ text: string; language: string }>;
+}
+
+export interface ControlledRemFeatures {
+  todoStatus?: string;
+  codeLanguage?: string;
+  isQuote: boolean;
+  isListItem: boolean;
+  templateRemId?: string;
 }
 
 export interface SearchResultItem {
@@ -233,6 +290,9 @@ export interface SearchResultItem {
   contextTitle?: string;
   contextReason?: SearchByTagContextReason;
   cardDirection?: CardDirection;
+  cardTypes?: string[];
+  frontCardHint?: string;
+  backCardHint?: string;
   content?: string;
   contentStructured?: StructuredContentNode[];
   contentProperties?: ContentProperties;
@@ -270,6 +330,9 @@ export interface StructuredContentNode {
   aliases?: string[];
   tags?: TagInfo[];
   cardDirection?: CardDirection;
+  cardTypes?: string[];
+  frontCardHint?: string;
+  backCardHint?: string;
   children?: StructuredContentNode[];
 }
 
@@ -481,9 +544,23 @@ interface IdReferenceToken {
   remId: string;
 }
 
+interface ClozeToken {
+  placeholder: string;
+  text: string;
+  clozeId: string;
+  hint?: string;
+}
+
+interface LiteralToken {
+  placeholder: string;
+  text: string;
+}
+
 interface PreparedMarkdown {
   markdown: string;
   idReferenceTokens: IdReferenceToken[];
+  clozeTokens: ClozeToken[];
+  literalTokens: LiteralToken[];
 }
 
 interface DiagnosticTrace {
@@ -496,6 +573,9 @@ const CONTENT_MODES: readonly ContentMode[] = ['none', 'markdown', 'structured']
 const RESULT_VIEWS: readonly ResultView[] = ['compact', 'standard', 'full'];
 const ID_REFERENCE_TOKEN_PATTERN = /\[\[id:([^\]\n]*)\]\]/g;
 const ID_REFERENCE_PLACEHOLDER_PREFIX = 'rnbridgeidrefplaceholder';
+const CLOZE_TOKEN_PATTERN = /\{\{([^{}\n]+)\}\}(?:\{\(\{([^{}\n]+)\}\)\})?/g;
+const CLOZE_PLACEHOLDER_PREFIX = 'rnbridgeclozeplaceholder';
+const LITERAL_ARROW_PLACEHOLDER_PREFIX = 'rnbridgearrowplaceholder';
 
 export class RemAdapter {
   private settings: AutomationBridgeSettings;
@@ -1785,6 +1865,9 @@ export class RemAdapter {
       tags,
       parentContext,
       ancestorContext,
+      cardTypes,
+      frontCardHint,
+      backCardHint,
     ] = await Promise.all([
       this.getTitleAndDetail(rem),
       this.classifyRem(rem),
@@ -1795,6 +1878,9 @@ export class RemAdapter {
       options.view !== 'compact' ? this.getTags(rem, tagNameCache) : Promise.resolve([]),
       this.getParentContext(rem),
       this.getAncestors(rem, options.ancestorDepth),
+      options.view === 'full' ? this.getCardTypes(rem) : Promise.resolve([]),
+      options.view === 'full' ? Promise.resolve(this.getFrontCardHint(rem.backText)) : undefined,
+      options.view === 'full' ? Promise.resolve(this.getBackCardHint(rem.text)) : undefined,
     ]);
 
     const headline = this.formatHeadline(title, detail, remType);
@@ -1840,6 +1926,9 @@ export class RemAdapter {
       ...(options.view !== 'compact' && tags.length > 0 ? { tags } : {}),
       remType,
       ...(options.view !== 'compact' && cardDirection ? { cardDirection } : {}),
+      ...(cardTypes.length > 0 ? { cardTypes } : {}),
+      ...(frontCardHint ? { frontCardHint } : {}),
+      ...(backCardHint ? { backCardHint } : {}),
       ...(content ? { content } : {}),
       ...(contentStructured ? { contentStructured } : {}),
       ...(contentProperties ? { contentProperties } : {}),
@@ -2035,16 +2124,27 @@ export class RemAdapter {
     const results: StructuredContentNode[] = [];
 
     for (const child of limitedChildren) {
-      const [{ title, detail, inlineRefs }, remType, cardDirection, aliases, tags] =
-        await Promise.all([
-          this.getTitleAndDetail(child),
-          this.classifyRem(child),
-          view !== 'compact' && child.backText
-            ? child.getPracticeDirection().then((direction) => this.mapCardDirection(direction))
-            : Promise.resolve(undefined),
-          view !== 'compact' ? this.getAliases(child) : Promise.resolve([]),
-          view !== 'compact' ? this.getTags(child, tagNameCache) : Promise.resolve([]),
-        ]);
+      const [
+        { title, detail, inlineRefs },
+        remType,
+        cardDirection,
+        aliases,
+        tags,
+        cardTypes,
+        frontCardHint,
+        backCardHint,
+      ] = await Promise.all([
+        this.getTitleAndDetail(child),
+        this.classifyRem(child),
+        view !== 'compact' && child.backText
+          ? child.getPracticeDirection().then((direction) => this.mapCardDirection(direction))
+          : Promise.resolve(undefined),
+        view !== 'compact' ? this.getAliases(child) : Promise.resolve([]),
+        view !== 'compact' ? this.getTags(child, tagNameCache) : Promise.resolve([]),
+        view === 'full' ? this.getCardTypes(child) : Promise.resolve([]),
+        view === 'full' ? Promise.resolve(this.getFrontCardHint(child.backText)) : undefined,
+        view === 'full' ? Promise.resolve(this.getBackCardHint(child.text)) : undefined,
+      ]);
 
       const children = await this.renderContentStructured(
         child,
@@ -2063,6 +2163,9 @@ export class RemAdapter {
         ...(view !== 'compact' && aliases.length > 0 ? { aliases } : {}),
         ...(view !== 'compact' && tags.length > 0 ? { tags } : {}),
         ...(view !== 'compact' && cardDirection ? { cardDirection } : {}),
+        ...(cardTypes.length > 0 ? { cardTypes } : {}),
+        ...(frontCardHint ? { frontCardHint } : {}),
+        ...(backCardHint ? { backCardHint } : {}),
         ...(children.length > 0 ? { children } : {}),
       });
     }
@@ -2094,6 +2197,24 @@ export class RemAdapter {
     }
   }
 
+  private createMarkdownPlaceholder(
+    prefix: string,
+    index: number,
+    markdown: string,
+    usedPlaceholders: Set<string>
+  ): string {
+    let attempt = 0;
+    while (true) {
+      const suffix = attempt === 0 ? '' : `x${attempt}`;
+      const placeholder = `${prefix}${index}${suffix}`;
+      if (!markdown.includes(placeholder) && !usedPlaceholders.has(placeholder)) {
+        usedPlaceholders.add(placeholder);
+        return placeholder;
+      }
+      attempt += 1;
+    }
+  }
+
   private async createRemReferenceRichText(remId: string): Promise<RichTextInterface> {
     return await this.plugin.richText.rem(remId).value();
   }
@@ -2109,7 +2230,7 @@ export class RemAdapter {
     }));
 
     if (matches.length === 0) {
-      return { markdown, idReferenceTokens: [] };
+      return this.prepareMarkdownFlashcardTokens(markdown, [], new Set<string>());
     }
 
     const uniqueRemIds = new Set<string>();
@@ -2141,7 +2262,53 @@ export class RemAdapter {
       idReferenceTokens.push({ placeholder, remId: match.remId });
     }
 
-    return { markdown: preparedMarkdown, idReferenceTokens };
+    return this.prepareMarkdownFlashcardTokens(
+      preparedMarkdown,
+      idReferenceTokens,
+      usedPlaceholders
+    );
+  }
+
+  private prepareMarkdownFlashcardTokens(
+    markdown: string,
+    idReferenceTokens: IdReferenceToken[],
+    usedPlaceholders: Set<string>
+  ): PreparedMarkdown {
+    let preparedMarkdown = markdown;
+    const clozeTokens: ClozeToken[] = [];
+    const clozeMatches = Array.from(preparedMarkdown.matchAll(CLOZE_TOKEN_PATTERN));
+
+    for (const [index, match] of clozeMatches.entries()) {
+      const placeholder = this.createMarkdownPlaceholder(
+        CLOZE_PLACEHOLDER_PREFIX,
+        index,
+        preparedMarkdown,
+        usedPlaceholders
+      );
+      preparedMarkdown = preparedMarkdown.replace(match[0], placeholder);
+      clozeTokens.push({
+        placeholder,
+        text: match[1],
+        clozeId: placeholder,
+        ...(match[2] ? { hint: match[2] } : {}),
+      });
+    }
+
+    const literalTokens: LiteralToken[] = [];
+    let arrowIndex = 0;
+    while (preparedMarkdown.includes('→')) {
+      const placeholder = this.createMarkdownPlaceholder(
+        LITERAL_ARROW_PLACEHOLDER_PREFIX,
+        arrowIndex,
+        preparedMarkdown,
+        usedPlaceholders
+      );
+      preparedMarkdown = preparedMarkdown.replace('→', placeholder);
+      literalTokens.push({ placeholder, text: '→' });
+      arrowIndex += 1;
+    }
+
+    return { markdown: preparedMarkdown, idReferenceTokens, clozeTokens, literalTokens };
   }
 
   private async replaceIdReferenceTokensInRichText(
@@ -2184,6 +2351,156 @@ export class RemAdapter {
     }
   }
 
+  private async replaceFlashcardTokensInRichText(
+    richText: RichTextInterface,
+    preparedMarkdown: PreparedMarkdown
+  ): Promise<RichTextInterface> {
+    let nextRichText = richText;
+    for (const token of preparedMarkdown.clozeTokens) {
+      nextRichText = await this.plugin.richText.replaceAllRichText(
+        nextRichText,
+        [token.placeholder],
+        [
+          {
+            i: 'm',
+            text: token.text,
+            cId: token.clozeId,
+            ...(token.hint ? { 'cloze-hint': token.hint } : {}),
+          },
+        ] as RichTextInterface
+      );
+    }
+    for (const token of preparedMarkdown.literalTokens) {
+      nextRichText = await this.plugin.richText.replaceAllRichText(
+        nextRichText,
+        [token.placeholder],
+        [token.text]
+      );
+    }
+    return nextRichText;
+  }
+
+  private async applyPreparedMarkdownTokensToRem(
+    rem: PluginRem,
+    preparedMarkdown: PreparedMarkdown
+  ): Promise<void> {
+    await this.applyIdReferenceTokensToRem(rem, preparedMarkdown);
+    if (rem.text) {
+      await rem.setText(await this.replaceFlashcardTokensInRichText(rem.text, preparedMarkdown));
+    }
+    if (rem.backText) {
+      await rem.setBackText(
+        await this.replaceFlashcardTokensInRichText(rem.backText, preparedMarkdown)
+      );
+    }
+  }
+
+  private removeRichTextPrefix(
+    richText: RichTextInterface,
+    prefixPattern: RegExp
+  ): RichTextInterface {
+    let removed = false;
+    const result: RichTextInterface = [];
+    for (const element of richText) {
+      if (removed) {
+        result.push(element);
+        continue;
+      }
+      if (typeof element === 'string') {
+        const next = element.replace(prefixPattern, '');
+        removed = next !== element;
+        if (next) result.push(next);
+        continue;
+      }
+      if (element && typeof element === 'object' && 'text' in element) {
+        const text = typeof element.text === 'string' ? element.text : '';
+        const next = text.replace(prefixPattern, '');
+        removed = next !== text;
+        if (next) result.push({ ...element, text: next });
+        continue;
+      }
+      result.push(element);
+    }
+    return result;
+  }
+
+  private setCardHint(
+    richText: RichTextInterface,
+    field: 'card-hint-front' | 'card-hint-back',
+    hint: string
+  ): RichTextInterface {
+    let applied = false;
+    const result = richText.map((element) => {
+      if (applied) return element;
+      if (typeof element === 'string') {
+        applied = true;
+        return { i: 'm', text: element, [field]: hint };
+      }
+      if (element && typeof element === 'object' && 'text' in element) {
+        applied = true;
+        return { ...element, [field]: hint };
+      }
+      return element;
+    }) as RichTextInterface;
+    return applied ? result : [{ i: 'm', text: '', [field]: hint }];
+  }
+
+  private getCardHint(
+    richText: RichTextInterface | undefined,
+    field: 'card-hint-front' | 'card-hint-back'
+  ): string | undefined {
+    for (const element of richText ?? []) {
+      const record =
+        element && typeof element === 'object' ? (element as Record<string, unknown>) : undefined;
+      if (record && field in record && typeof record[field] === 'string') {
+        return record[field] as string;
+      }
+    }
+    return undefined;
+  }
+
+  private getFrontCardHint(richText: RichTextInterface | undefined): string | undefined {
+    return this.getCardHint(richText, 'card-hint-back');
+  }
+
+  private getBackCardHint(richText: RichTextInterface | undefined): string | undefined {
+    return this.getCardHint(richText, 'card-hint-front');
+  }
+
+  private async getCardTypes(rem: PluginRem): Promise<string[]> {
+    const cards = await rem.getCards();
+    return cards.map((card) =>
+      typeof card.type === 'string' ? card.type : `cloze:${String(card.type.clozeId)}`
+    );
+  }
+
+  private async applyEnhancedCardChildSyntax(rems: PluginRem[]): Promise<PluginRem[]> {
+    const keptRems: PluginRem[] = [];
+    for (const rem of rems) {
+      const text = await this.extractText(rem.text);
+      if (/^\/extra(?:\s|$)/.test(text)) {
+        await rem.setText(this.removeRichTextPrefix(rem.text ?? [], /^\/extra\s*/));
+        await rem.addPowerup(BuiltInPowerupCodes.ExtraCardDetail);
+        keptRems.push(rem);
+        continue;
+      }
+      if (/^\/hint(?:\s|$)/.test(text)) {
+        const parent = await rem.getParentRem();
+        if (!parent) {
+          throw new Error('/hint must be nested under a flashcard Rem');
+        }
+        const hint = text.replace(/^\/hint\s*/, '');
+        await parent.setText(this.setCardHint(parent.text ?? [], 'card-hint-front', hint));
+        await rem.remove();
+        continue;
+      }
+      keptRems.push(rem);
+    }
+    return await Promise.all(
+      keptRems.map(async (rem) => (await this.plugin.rem.findOne(rem._id)) ?? rem)
+    );
+  }
+
   private async parseMarkdownWithIdReferenceTokens(markdown: string): Promise<RichTextInterface> {
     const preparedMarkdown = await this.prepareMarkdownIdReferenceTokens(markdown);
     const richText = await this.plugin.richText.parseFromMarkdown(preparedMarkdown.markdown);
@@ -2197,12 +2514,32 @@ export class RemAdapter {
     preparedMarkdown: PreparedMarkdown,
     parentId?: string
   ): Promise<PluginRem> {
+    if (preparedMarkdown.idReferenceTokens.length > 0) {
+      const rem = await this.plugin.rem.createRem();
+      if (!rem) throw new Error('Failed to create Rem');
+      const parsed = await this.plugin.richText.parseFromMarkdown(preparedMarkdown.markdown);
+      await rem.setText(
+        await this.replaceIdReferenceTokensInRichText(
+          parsed,
+          preparedMarkdown.idReferenceTokens
+        )
+      );
+      if (parentId) {
+        const parent = await this.plugin.rem.findOne(parentId);
+        if (!parent) {
+          await rem.remove();
+          throw new Error(`Parent note not found: ${parentId}`);
+        }
+        await rem.setParent(parent);
+      }
+      return rem;
+    }
     const rem = await this.plugin.rem.createSingleRemWithMarkdown(
       preparedMarkdown.markdown,
       parentId
     );
     if (!rem) throw new Error('Failed to create Rem');
-    await this.applyIdReferenceTokensToRem(rem, preparedMarkdown);
+    await this.applyPreparedMarkdownTokensToRem(rem, preparedMarkdown);
     return rem;
   }
 
@@ -2500,22 +2837,26 @@ export class RemAdapter {
 
     // Return all created Rems (all descendants in the tree except the dummy root).
     const createdRems = tree.slice(1);
+    const refreshedRems: PluginRem[] = [];
     for (const rem of createdRems) {
       this.logDiagnosticTrace(diagnosticTrace, 'id_reference_patch:start', {
         remId: rem._id,
         idReferenceTokenCount: preparedMarkdown.idReferenceTokens.length,
       });
-      await this.applyIdReferenceTokensToRem(rem, preparedMarkdown);
+      await this.applyPreparedMarkdownTokensToRem(rem, preparedMarkdown);
       this.logDiagnosticTrace(diagnosticTrace, 'id_reference_patch:done', {
         remId: rem._id,
       });
+      refreshedRems.push((await this.plugin.rem.findOne(rem._id)) ?? rem);
     }
 
+    const enhancedRems = await this.applyEnhancedCardChildSyntax(refreshedRems);
+
     this.logDiagnosticTrace(diagnosticTrace, 'markdown_tree:done', {
-      createdRemCount: createdRems.length,
-      createdRemIds: createdRems.map((rem) => rem._id),
+      createdRemCount: enhancedRems.length,
+      createdRemIds: enhancedRems.map((rem) => rem._id),
     });
-    return createdRems;
+    return enhancedRems;
   }
 
   private async getInsertPosition(params: InsertChildrenParams): Promise<number> {
@@ -2676,7 +3017,7 @@ export class RemAdapter {
         }
       }
 
-      return await this.runInTransaction(async () => {
+      const result = await this.runInTransaction(async () => {
         const titleRem = await this.createSingleRemWithPreparedMarkdown(preparedTitle!, parentId);
 
         if (asDocument) {
@@ -2704,6 +3045,13 @@ export class RemAdapter {
 
         return { remIds, titles };
       });
+      if (preparedTitle!.idReferenceTokens.length > 0) {
+        const committedTitleRem = await this.plugin.rem.findOne(result.remIds[0]);
+        if (committedTitleRem) {
+          await this.applyPreparedMarkdownTokensToRem(committedTitleRem, preparedTitle!);
+        }
+      }
+      return result;
     } else if (hasContent) {
       // Scenario 2: content only
       // Normalize content to collapse consecutive blank lines
@@ -2888,6 +3236,11 @@ export class RemAdapter {
     tags?: TagInfo[];
     remType: RemClassification;
     cardDirection?: CardDirection;
+    cardTypes?: string[];
+    frontCardHint?: string;
+    backCardHint?: string;
+    richContent?: RichContentMetadata;
+    controlledFeatures?: ControlledRemFeatures;
     content?: string;
     contentStructured?: StructuredContentNode[];
     contentProperties?: ContentProperties;
@@ -2918,6 +3271,11 @@ export class RemAdapter {
       tags,
       parentContext,
       ancestorContext,
+      cardTypes,
+      frontCardHint,
+      backCardHint,
+      richContent,
+      controlledFeatures,
     ] = await Promise.all([
       this.getTitleAndDetail(rem),
       this.classifyRem(rem),
@@ -2928,6 +3286,11 @@ export class RemAdapter {
       view !== 'compact' ? this.getTags(rem, tagNameCache) : Promise.resolve([]),
       this.getParentContext(rem),
       this.getAncestors(rem, ancestorDepth),
+      view === 'full' ? this.getCardTypes(rem) : Promise.resolve([]),
+      view === 'full' ? Promise.resolve(this.getFrontCardHint(rem.backText)) : undefined,
+      view === 'full' ? Promise.resolve(this.getBackCardHint(rem.text)) : undefined,
+      view === 'full' ? Promise.resolve(this.getRichContentMetadata(rem)) : undefined,
+      view === 'full' ? this.getControlledRemFeatures(rem) : undefined,
     ]);
 
     const headline = this.formatHeadline(title, detail, remType);
@@ -2972,9 +3335,66 @@ export class RemAdapter {
       ...(view !== 'compact' && tags.length > 0 ? { tags } : {}),
       remType,
       ...(view !== 'compact' && cardDirection ? { cardDirection } : {}),
+      ...(cardTypes.length > 0 ? { cardTypes } : {}),
+      ...(frontCardHint ? { frontCardHint } : {}),
+      ...(backCardHint ? { backCardHint } : {}),
+      ...(richContent &&
+      (richContent.images.length > 0 || richContent.links.length > 0 || richContent.code.length > 0)
+        ? { richContent }
+        : {}),
+      ...(controlledFeatures ? { controlledFeatures } : {}),
       ...(content !== undefined ? { content } : {}),
       ...(contentStructured ? { contentStructured } : {}),
       ...(contentProperties ? { contentProperties } : {}),
+    };
+  }
+
+  private getRichContentMetadata(rem: PluginRem): RichContentMetadata {
+    const metadata: RichContentMetadata = { images: [], links: [], code: [] };
+    for (const element of [...(rem.text ?? []), ...(rem.backText ?? [])]) {
+      if (!element || typeof element !== 'object') continue;
+      if (element.i === 'i' && typeof element.url === 'string') {
+        metadata.images.push({
+          url: element.url,
+          ...(element.width ? { width: element.width } : {}),
+          ...(element.height ? { height: element.height } : {}),
+        });
+      } else if ('qId' in element && typeof element.qId === 'string') {
+        metadata.links.push({
+          text: 'text' in element && typeof element.text === 'string' ? element.text : element.qId,
+          url: element.qId,
+        });
+      } else if ('language' in element && typeof element.language === 'string') {
+        metadata.code.push({
+          text: 'text' in element && typeof element.text === 'string' ? element.text : '',
+          language: element.language,
+        });
+      }
+    }
+    return metadata;
+  }
+
+  private async getControlledRemFeatures(rem: PluginRem): Promise<ControlledRemFeatures> {
+    const [hasTodo, hasCode, hasAppliedTemplate, isQuote, isListItem] = await Promise.all([
+      rem.hasPowerup(BuiltInPowerupCodes.Todo),
+      rem.hasPowerup(BuiltInPowerupCodes.Code),
+      rem.hasPowerup(BuiltInPowerupCodes.AppliedTemplates),
+      rem.isQuote(),
+      rem.isListItem(),
+    ]);
+    const template = hasAppliedTemplate
+      ? await rem.getPowerupPropertyAsRem(BuiltInPowerupCodes.AppliedTemplates, 'Templates')
+      : undefined;
+    return {
+      ...(hasTodo
+        ? { todoStatus: await rem.getPowerupProperty(BuiltInPowerupCodes.Todo, 'Status') }
+        : {}),
+      ...(hasCode
+        ? { codeLanguage: await rem.getPowerupProperty(BuiltInPowerupCodes.Code, 'Language') }
+        : {}),
+      isQuote,
+      isListItem,
+      ...(template ? { templateRemId: template._id } : {}),
     };
   }
 
@@ -3127,21 +3547,61 @@ export class RemAdapter {
   private async buildRichTextFromTokens(
     tokens: UpdateNoteRichTextToken[]
   ): Promise<RichTextInterface | null> {
-    let builder: ReturnType<typeof this.plugin.richText.text> | null = null;
+    const result: RichTextInterface = [];
     for (const token of tokens) {
       if (!token || typeof token !== 'object') continue;
       if (token.type === 'text' && typeof token.value === 'string') {
-        builder = builder ? builder.text(token.value) : this.plugin.richText.text(token.value);
+        result.push(token.value);
       } else if (token.type === 'rem' && typeof token.remId === 'string') {
-        builder = builder ? builder.rem(token.remId) : this.plugin.richText.rem(token.remId);
+        result.push(...(await this.plugin.richText.rem(token.remId).value()));
+      } else if (token.type === 'image' && typeof token.url === 'string') {
+        this.requireHttpUrl(token.url, 'image url');
+        result.push({
+          i: 'i',
+          url: token.url,
+          ...(token.width ? { width: token.width } : {}),
+          ...(token.height ? { height: token.height } : {}),
+        } as RichTextInterface[number]);
+      } else if (token.type === 'link' && typeof token.url === 'string') {
+        this.requireHttpUrl(token.url, 'link url');
+        result.push({
+          i: 'm',
+          text: token.value ?? token.url,
+          qId: token.url,
+        } as RichTextInterface[number]);
+      } else if (token.type === 'code' && typeof token.value === 'string') {
+        result.push({
+          i: 'm',
+          text: token.value,
+          language: token.language ?? 'text',
+        } as RichTextInterface[number]);
       }
     }
-    return builder ? await builder.value() : null;
+    return result.length > 0 ? result : null;
   }
 
   /** Render a compact history label for rich text tokens, e.g. `front<<remId>>text`. */
   private describeRichTextTokens(tokens: UpdateNoteRichTextToken[]): string {
-    return tokens.map((token) => (token.type === 'text' ? token.value : `<<${token.remId}>>`)).join('');
+    return tokens
+      .map((token) => {
+        if (token.type === 'text' || token.type === 'code') return token.value;
+        if (token.type === 'rem') return `<<${token.remId}>>`;
+        return token.url;
+      })
+      .join('');
+  }
+
+  private requireHttpUrl(value: string, fieldName: string): URL {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error(`${fieldName} must be a valid http(s) URL`);
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error(`${fieldName} must be a valid http(s) URL`);
+    }
+    return url;
   }
 
   /**
@@ -3185,6 +3645,8 @@ export class RemAdapter {
 
     const remIds: string[] = [];
     const titles: string[] = [];
+    let currentFrontText = rem.text ?? [];
+    let currentBackText = rem.backText ?? [];
 
     // Update title if provided
     if (params.title !== undefined && params.title !== null) {
@@ -3193,6 +3655,7 @@ export class RemAdapter {
       await this.runInTransaction(async () => {
         await rem.setText(richText);
       });
+      currentFrontText = richText;
       titles.push(title);
       remIds.push(remId);
     }
@@ -3205,19 +3668,41 @@ export class RemAdapter {
       const frontText = await this.buildRichTextFromTokens(params.richText);
       if (frontText) {
         await rem.setText(frontText);
+        currentFrontText = frontText;
         titles.push(`[front] ${this.describeRichTextTokens(params.richText)}`);
         remIds.push(remId);
       }
     }
 
     // cc52: set back text (flashcard answer side) from rich text tokens
-    if (params.richTextBack && Array.isArray(params.richTextBack) && params.richTextBack.length > 0) {
+    if (
+      params.richTextBack &&
+      Array.isArray(params.richTextBack) &&
+      params.richTextBack.length > 0
+    ) {
       const backText = await this.buildRichTextFromTokens(params.richTextBack);
       if (backText) {
         await rem.setBackText(backText);
+        currentBackText = backText;
         titles.push(`[back] ${this.describeRichTextTokens(params.richTextBack)}`);
         remIds.push(remId);
       }
+    }
+
+    if (params.frontCardHint !== undefined) {
+      const hint = this.requireString(params.frontCardHint, 'frontCardHint');
+      currentBackText = this.setCardHint(currentBackText, 'card-hint-back', hint);
+      await rem.setBackText(currentBackText);
+      if (!remIds.includes(remId)) remIds.push(remId);
+      titles.push('[frontCardHint updated]');
+    }
+
+    if (params.backCardHint !== undefined) {
+      const hint = this.requireString(params.backCardHint, 'backCardHint');
+      currentFrontText = this.setCardHint(currentFrontText, 'card-hint-front', hint);
+      await rem.setText(currentFrontText);
+      if (!remIds.includes(remId)) remIds.push(remId);
+      titles.push('[backCardHint updated]');
     }
 
     // Replace content by clearing all direct children first, then adding new child lines.
@@ -3282,6 +3767,18 @@ export class RemAdapter {
             withScopedLogPrefix('adapter', `Failed to add alias "${aliasText}" to rem ${rem._id}`),
             this.describeError(error)
           );
+        }
+      }
+    }
+
+    if (params.removeAliases && params.removeAliases.length > 0) {
+      const aliasesToRemove = new Set(params.removeAliases.filter((alias) => alias.length > 0));
+      for (const aliasRem of await rem.getAliases()) {
+        const aliasText = await this.extractText(aliasRem.text);
+        if (aliasesToRemove.has(aliasText)) {
+          await aliasRem.remove();
+          titles.push(`[alias removed] ${aliasText}`);
+          if (!remIds.includes(remId)) remIds.push(remId);
         }
       }
     }
@@ -3689,6 +4186,265 @@ export class RemAdapter {
       tagRemId,
       propertyRemId,
       valueKind: normalizedValue.kind,
+    };
+  }
+
+  async managePortal(params: ManagePortalParams): Promise<{
+    portalRemId: string;
+    portalType: string;
+    includedRems: Array<{ remId: string; title: string }>;
+  }> {
+    if (!this.settings.acceptWriteOperations && params.operation !== 'read') {
+      throw new Error('Write operations are disabled in Automation Bridge settings');
+    }
+
+    let portal: PluginRem | null | undefined;
+    if (params.operation === 'create') {
+      portal = await this.plugin.rem.createPortal();
+      if (!portal) throw new Error('Failed to create portal');
+      if (params.title !== undefined) {
+        await portal.setText(await this.parseMarkdownWithIdReferenceTokens(params.title));
+      }
+      if (params.parentRemId) {
+        const parent = await this.plugin.rem.findOne(params.parentRemId);
+        if (!parent) {
+          await portal.remove();
+          throw new Error(`Parent note not found: ${params.parentRemId}`);
+        }
+        await portal.setParent(parent);
+      }
+    } else {
+      const portalRemId = this.requireString(params.portalRemId, 'portalRemId');
+      portal = await this.plugin.rem.findOne(portalRemId);
+      if (!portal || portal.type !== RemType.PORTAL) {
+        throw new Error(`Portal not found: ${portalRemId}`);
+      }
+    }
+
+    if (params.operation === 'add' || params.operation === 'remove') {
+      const remId = this.requireString(params.remId, 'remId');
+      const rem = await this.plugin.rem.findOne(remId);
+      if (!rem) throw new Error(`Note not found: ${remId}`);
+      if (params.operation === 'add') await rem.addToPortal(portal);
+      else await rem.removeFromPortal(portal);
+    }
+
+    const included = await portal.getPortalDirectlyIncludedRem();
+    return {
+      portalRemId: portal._id,
+      portalType: String((await portal.getPortalType()) ?? 'portal'),
+      includedRems: await Promise.all(
+        included.map(async (rem) => ({
+          remId: rem._id,
+          title: (await this.getTitleAndDetail(rem)).title,
+        }))
+      ),
+    };
+  }
+
+  async createTable(params: CreateTableParams): Promise<{
+    tableRemId: string;
+    tagRemId: string;
+    title: string;
+    columns: Array<{
+      propertyId: string;
+      name: string;
+      requestedType: string;
+      actualType: string;
+      typeApplied: boolean;
+    }>;
+  }> {
+    if (!this.settings.acceptWriteOperations) {
+      throw new Error('Write operations are disabled in Automation Bridge settings');
+    }
+    const title = this.requireString(params.title, 'title');
+    if (!Array.isArray(params.columns) || params.columns.length === 0) {
+      throw new Error('columns must contain at least one property definition');
+    }
+    const parent = params.parentRemId
+      ? await this.plugin.rem.findOne(params.parentRemId)
+      : undefined;
+    if (params.parentRemId && !parent) {
+      throw new Error(`Parent note not found: ${params.parentRemId}`);
+    }
+
+    const tag = await this.plugin.rem.createRem();
+    if (!tag) throw new Error('Failed to create table tag');
+    try {
+      await tag.setText(await this.parseMarkdownWithIdReferenceTokens(title));
+      if (parent) await tag.setParent(parent);
+      const table = await this.plugin.rem.createTable(tag);
+      if (!table) throw new Error('Failed to create table');
+      if (parent) await table.setParent(parent);
+      const columns = [];
+      for (const definition of params.columns) {
+        const name = this.requireString(definition.name, 'column name');
+        const property = await this.plugin.rem.createRem();
+        if (!property) throw new Error(`Failed to create table property: ${name}`);
+        await property.setText([name]);
+        await property.setIsProperty(true);
+        await property.setParent(tag);
+        const actualType = String((await property.getPropertyType()) ?? 'text');
+        const requestedType = definition.type ?? 'text';
+        columns.push({
+          propertyId: property._id,
+          name,
+          requestedType,
+          actualType,
+          typeApplied: requestedType === actualType || requestedType === 'text',
+        });
+      }
+      return { tableRemId: table._id, tagRemId: tag._id, title, columns };
+    } catch (error) {
+      await tag.remove();
+      throw error;
+    }
+  }
+
+  async createTableRow(params: CreateTableRowParams): Promise<{
+    remId: string;
+    tableRemId: string;
+    title: string;
+    propertyIds: string[];
+  }> {
+    if (!this.settings.acceptWriteOperations) {
+      throw new Error('Write operations are disabled in Automation Bridge settings');
+    }
+    const tableRemId = this.requireString(params.tableRemId, 'tableRemId');
+    const table = await this.plugin.rem.findOne(tableRemId);
+    if (!table) throw new Error(`Table not found: ${tableRemId}`);
+    const isTable = await table.isTable();
+    const properties = await this.getTablePropertyChildren(table);
+    if (!isTable && properties.length === 0) throw new Error(`Table not found: ${tableRemId}`);
+    const parent = params.parentRemId
+      ? await this.plugin.rem.findOne(params.parentRemId)
+      : undefined;
+    if (params.parentRemId && !parent) {
+      throw new Error(`Parent note not found: ${params.parentRemId}`);
+    }
+    const title = this.requireString(params.title, 'title');
+    const row = await this.plugin.rem.createRem();
+    if (!row) throw new Error('Failed to create table row');
+    try {
+      await row.setText(await this.parseMarkdownWithIdReferenceTokens(title));
+      if (parent) await row.setParent(parent);
+      await row.addTag(tableRemId);
+      const propertyIds = Object.keys(params.values ?? {});
+      for (const propertyId of propertyIds) {
+        const normalized = await this.normalizeSetPropertyValue(params.values![propertyId]);
+        await row.setTagPropertyValue(propertyId, normalized.richText);
+      }
+      return { remId: row._id, tableRemId, title, propertyIds };
+    } catch (error) {
+      await row.remove();
+      throw error;
+    }
+  }
+
+  async setRemFeatures(params: SetRemFeaturesParams): Promise<{
+    remId: string;
+    todoStatus?: string;
+    codeLanguage?: string;
+    isQuote: boolean;
+    isListItem: boolean;
+    templateRemId?: string;
+  }> {
+    if (!this.settings.acceptWriteOperations) {
+      throw new Error('Write operations are disabled in Automation Bridge settings');
+    }
+    const remId = this.requireString(params.remId, 'remId');
+    const rem = await this.plugin.rem.findOne(remId);
+    if (!rem) throw new Error(`Note not found: ${remId}`);
+
+    if (params.todoStatus) {
+      if (params.todoStatus === 'clear') await rem.removePowerup(BuiltInPowerupCodes.Todo);
+      else {
+        await rem.addPowerup(BuiltInPowerupCodes.Todo);
+        await rem.setPowerupProperty(BuiltInPowerupCodes.Todo, 'Status', [
+          params.todoStatus === 'finished' ? 'Finished' : 'Todo',
+        ]);
+      }
+    }
+    if (params.codeLanguage !== undefined) {
+      if (params.codeLanguage === null) await rem.removePowerup(BuiltInPowerupCodes.Code);
+      else {
+        await rem.addPowerup(BuiltInPowerupCodes.Code);
+        await rem.setPowerupProperty(BuiltInPowerupCodes.Code, 'Language', [
+          params.codeLanguage,
+        ]);
+      }
+    }
+    if (params.isQuote !== undefined) await rem.setIsQuote(params.isQuote);
+    if (params.isListItem !== undefined) await rem.setIsListItem(params.isListItem);
+    if (params.templateRemId !== undefined) {
+      if (params.templateRemId === null) {
+        await rem.removePowerup(BuiltInPowerupCodes.AppliedTemplates);
+      } else {
+        const template = await this.plugin.rem.findOne(params.templateRemId);
+        if (!template) throw new Error(`Template note not found: ${params.templateRemId}`);
+        await rem.addPowerup(BuiltInPowerupCodes.AppliedTemplates);
+        await rem.setPowerupProperty(
+          BuiltInPowerupCodes.AppliedTemplates,
+          'Templates',
+          await this.plugin.richText.rem(template).value()
+        );
+      }
+    }
+
+    const template = await rem.getPowerupPropertyAsRem(
+      BuiltInPowerupCodes.AppliedTemplates,
+      'Templates'
+    );
+    return {
+      remId,
+      ...((await rem.hasPowerup(BuiltInPowerupCodes.Todo))
+        ? {
+            todoStatus: await rem.getPowerupProperty(
+              BuiltInPowerupCodes.Todo,
+              'Status'
+            ),
+          }
+        : {}),
+      ...((await rem.hasPowerup(BuiltInPowerupCodes.Code))
+        ? {
+            codeLanguage: await rem.getPowerupProperty(
+              BuiltInPowerupCodes.Code,
+              'Language'
+            ),
+          }
+        : {}),
+      isQuote: await rem.isQuote(),
+      isListItem: await rem.isListItem(),
+      ...(template ? { templateRemId: template._id } : {}),
+    };
+  }
+
+  async createLinkRem(params: CreateLinkRemParams): Promise<{
+    remId: string;
+    title: string;
+    url: string;
+  }> {
+    if (!this.settings.acceptWriteOperations) {
+      throw new Error('Write operations are disabled in Automation Bridge settings');
+    }
+    const url = this.requireHttpUrl(params.url, 'url').toString();
+    const parent = params.parentRemId
+      ? await this.plugin.rem.findOne(params.parentRemId)
+      : undefined;
+    if (params.parentRemId && !parent) {
+      throw new Error(`Parent note not found: ${params.parentRemId}`);
+    }
+    const rem = await this.plugin.rem.createLinkRem(url, false);
+    if (!rem) throw new Error('Failed to create external link Rem');
+    if (params.title) {
+      await rem.setText([params.title]);
+      await rem.setPowerupProperty(BuiltInPowerupCodes.Link, 'Title', [params.title]);
+    }
+    if (parent) await rem.setParent(parent);
+    return {
+      remId: rem._id,
+      title: (await this.getTitleAndDetail(rem)).title,
+      url,
     };
   }
 

@@ -98,6 +98,7 @@ export class MockRem {
   private _isDocument = false;
   private _powerups: string[] = [];
   private _practiceDirection: 'forward' | 'backward' | 'both' | 'none' = 'none';
+  private _cardTypes: string[] = [];
   private _aliases: MockRem[] = [];
   private _taggedRems: MockRem[] = [];
   private _tagRems: MockRem[] = [];
@@ -109,10 +110,15 @@ export class MockRem {
   private _propertyType: string | undefined;
   private _tagPropertyValues = new Map<string, RichTextInterface>();
   private _isTable = false;
+  private _portalIncluded: MockRem[] = [];
+  private _isQuote = false;
+  private _isListItem = false;
+  private _powerupProperties = new Map<string, RichTextInterface>();
 
   constructor(id: string, text: string) {
     this._id = id;
     this.text = [text];
+    MockRem.registry.set(id, this);
   }
 
   /** Configure mock to behave as a document */
@@ -128,6 +134,14 @@ export class MockRem {
   /** Set the mock practice direction */
   setPracticeDirectionMock(dir: 'forward' | 'backward' | 'both' | 'none'): void {
     this._practiceDirection = dir;
+  }
+
+  setCardTypesMock(types: string[]): void {
+    this._cardTypes = types;
+  }
+
+  async getCards(): Promise<Array<{ type: string }>> {
+    return this._cardTypes.map((type) => ({ type }));
   }
 
   /** Set mock aliases (pass RichTextInterface arrays which become MockRem .text) */
@@ -155,9 +169,7 @@ export class MockRem {
 
   async mergeAndSetAlias(remToMergeIntoThisOne: string | MockRem): Promise<void> {
     const sourceId =
-      typeof remToMergeIntoThisOne === 'string'
-        ? remToMergeIntoThisOne
-        : remToMergeIntoThisOne._id;
+      typeof remToMergeIntoThisOne === 'string' ? remToMergeIntoThisOne : remToMergeIntoThisOne._id;
     this.mergedFromRemIds.push(sourceId);
   }
 
@@ -213,6 +225,42 @@ export class MockRem {
 
   async hasPowerup(code: string): Promise<boolean> {
     return this._powerups.includes(code);
+  }
+
+  async addPowerup(code: string): Promise<void> {
+    if (!this._powerups.includes(code)) this._powerups.push(code);
+  }
+
+  async removePowerup(code: string): Promise<void> {
+    this._powerups = this._powerups.filter((value) => value !== code);
+    for (const key of [...this._powerupProperties.keys()]) {
+      if (key.startsWith(`${code}:`)) this._powerupProperties.delete(key);
+    }
+  }
+
+  async setPowerupProperty(code: string, slot: string, value: RichTextInterface): Promise<void> {
+    this._powerupProperties.set(`${code}:${slot}`, value);
+  }
+
+  async getPowerupProperty(code: string, slot: string): Promise<string> {
+    const value = this._powerupProperties.get(`${code}:${slot}`) ?? [];
+    return value
+      .map((item) =>
+        typeof item === 'string'
+          ? item
+          : 'text' in item && typeof item.text === 'string'
+            ? item.text
+            : ''
+      )
+      .join('');
+  }
+
+  async getPowerupPropertyAsRem(code: string, slot: string): Promise<MockRem | undefined> {
+    const value = this._powerupProperties.get(`${code}:${slot}`) ?? [];
+    const reference = value.find(
+      (item) => item && typeof item === 'object' && 'i' in item && item.i === 'q'
+    ) as { _id?: string } | undefined;
+    return reference?._id ? MockRem.registry.get(reference._id) : undefined;
   }
 
   async getPracticeDirection(): Promise<'forward' | 'backward' | 'both' | 'none'> {
@@ -281,6 +329,44 @@ export class MockRem {
 
   async isTable(): Promise<boolean> {
     return this._isTable;
+  }
+
+  static registry = new Map<string, MockRem>();
+
+  async addToPortal(portal: MockRem): Promise<void> {
+    if (!portal._portalIncluded.includes(this)) portal._portalIncluded.push(this);
+  }
+
+  async removeFromPortal(portal: MockRem): Promise<void> {
+    portal._portalIncluded = portal._portalIncluded.filter((item) => item !== this);
+  }
+
+  async getPortalDirectlyIncludedRem(): Promise<MockRem[]> {
+    return this._portalIncluded;
+  }
+
+  async getPortalType(): Promise<number> {
+    return 0;
+  }
+
+  async setIsProperty(isProperty: boolean): Promise<void> {
+    this._isProperty = isProperty;
+  }
+
+  async setIsQuote(isQuote: boolean): Promise<void> {
+    this._isQuote = isQuote;
+  }
+
+  async isQuote(): Promise<boolean> {
+    return this._isQuote;
+  }
+
+  async setIsListItem(isListItem: boolean): Promise<void> {
+    this._isListItem = isListItem;
+  }
+
+  async isListItem(): Promise<boolean> {
+    return this._isListItem;
   }
 
   async setText(text: RichTextInterface): Promise<void> {
@@ -387,6 +473,33 @@ export class MockRemNotePlugin {
     createRem: vi.fn(async (): Promise<MockRem> => {
       const id = `rem_${this.nextId++}`;
       const rem = new MockRem(id, '');
+      this.rems.set(id, rem);
+      return rem;
+    }),
+
+    createPortal: vi.fn(async (): Promise<MockRem> => {
+      const id = `portal_${this.nextId++}`;
+      const rem = new MockRem(id, '');
+      rem.type = RemType.PORTAL;
+      this.rems.set(id, rem);
+      return rem;
+    }),
+
+    createTable: vi.fn(async (existingTag?: string | MockRem): Promise<MockRem> => {
+      const id = `table_${this.nextId++}`;
+      const rem = new MockRem(id, '');
+      rem.setIsTableMock(true);
+      this.rems.set(id, rem);
+      if (existingTag) {
+        const tag = typeof existingTag === 'string' ? this.rems.get(existingTag) : existingTag;
+        if (tag) rem.text = tag.text;
+      }
+      return rem;
+    }),
+
+    createLinkRem: vi.fn(async (url: string): Promise<MockRem> => {
+      const id = `link_${this.nextId++}`;
+      const rem = new MockRem(id, url);
       this.rems.set(id, rem);
       return rem;
     }),

@@ -404,6 +404,58 @@ class BridgeRuntimeController implements BridgeRuntime {
         return result;
       }
 
+      case 'manage_portal': {
+        const result = await this.adapter.managePortal({
+          operation: payload.operation as 'create' | 'add' | 'remove' | 'read',
+          portalRemId: payload.portalRemId as string | undefined,
+          remId: payload.remId as string | undefined,
+          title: payload.title as string | undefined,
+          parentRemId: payload.parentRemId as string | undefined,
+        });
+        return result;
+      }
+
+      case 'create_table': {
+        return await this.adapter.createTable({
+          title: payload.title as string,
+          parentRemId: payload.parentRemId as string | undefined,
+          columns: payload.columns as Array<{ name: string; type?: string }>,
+        });
+      }
+
+      case 'create_table_row': {
+        return await this.adapter.createTableRow({
+          tableRemId: payload.tableRemId as string,
+          title: payload.title as string,
+          parentRemId: payload.parentRemId as string | undefined,
+          values: payload.values as Record<
+            string,
+            | { kind: 'text'; text: string }
+            | { kind: 'rem_reference'; remId: string }
+            | { kind: 'clear' }
+          >,
+        });
+      }
+
+      case 'set_rem_features': {
+        return await this.adapter.setRemFeatures({
+          remId: payload.remId as string,
+          todoStatus: payload.todoStatus as 'todo' | 'finished' | 'clear' | undefined,
+          codeLanguage: payload.codeLanguage as string | null | undefined,
+          isQuote: payload.isQuote as boolean | undefined,
+          isListItem: payload.isListItem as boolean | undefined,
+          templateRemId: payload.templateRemId as string | null | undefined,
+        });
+      }
+
+      case 'create_link_rem': {
+        return await this.adapter.createLinkRem({
+          url: payload.url as string,
+          title: payload.title as string | undefined,
+          parentRemId: payload.parentRemId as string | undefined,
+        });
+      }
+
       case 'update_note': {
         const result = await this.adapter.updateNote({
           remId: payload.remId as string,
@@ -413,9 +465,12 @@ class BridgeRuntimeController implements BridgeRuntime {
           addTags: payload.addTags as string[] | undefined,
           removeTags: payload.removeTags as string[] | undefined,
           addAliases: payload.addAliases as string[] | undefined,
+          removeAliases: payload.removeAliases as string[] | undefined,
           mergeFromRemId: payload.mergeFromRemId as string | undefined,
           richText: payload.richText as UpdateNoteRichTextToken[] | undefined,
           richTextBack: payload.richTextBack as UpdateNoteRichTextToken[] | undefined,
+          frontCardHint: payload.frontCardHint as string | undefined,
+          backCardHint: payload.backCardHint as string | undefined,
           setParentId: payload.setParentId as string | undefined,
           setIsDocument: payload.setIsDocument as boolean | undefined,
           setIsFolder: payload.setIsFolder as boolean | undefined,

@@ -7,6 +7,42 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.12] - 2026-07-12
+
+### Fixed
+
+- Create titles containing exact-ID references through native `createRem` rich text instead of the markdown single-Rem creator, preventing its asynchronous placeholder snapshot restore.
+
+## [0.17.11] - 2026-07-12
+
+### Fixed
+
+- Reapply exact-ID title references after transaction commit to prevent RemNote from restoring placeholder snapshots.
+- Store requested external link titles in the Link Powerup title slot in addition to visible text.
+
+## [0.17.10] - 2026-07-12
+
+### Fixed
+
+- Pass an explicit tag Rem to `rem.createTable`, matching the current RemNote runtime requirement despite the SDK's optional TypeScript declaration.
+- Avoid reporting inherited/default templates as explicitly applied templates in full note diagnostics.
+- Normalize an undefined ordinary Portal type to `portal`.
+
+## [0.17.9] - 2026-07-12
+
+### Added
+
+- Add exact-ID Portal creation, inspection, inclusion, and removal actions without changing source Rem hierarchy.
+- Add Advanced Table and row creation, with explicit reporting when the SDK cannot apply requested non-text column types.
+- Add controlled Todo, Code, Quote, List Item, and Applied Template writes plus external link Rem creation.
+- Add image, link, code, and exact-reference rich-text tokens and full-read diagnostics for media and controlled features.
+
+### Fixed
+
+- Preserve newly written front and back rich text when card hints are changed in the same update request.
+
+## [0.17.7] - 2026-07-12
+
 ### Added
 
 - Add support for scoped search in `search` action via `parentRemId`, enabling queries limited to a specific Rem's subtree. Contributed by Twb06.
@@ -22,6 +58,19 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Preserve `{{cloze}}` syntax as native RemNote cloze rich text during markdown-tree imports.
+- Preserve literal Unicode arrows (`→`) in imported content instead of allowing the SDK to interpret them as
+  flashcard separators.
+- Refresh imported Rem objects after restoring protected tokens so create responses do not expose internal
+  placeholders from stale SDK objects.
+- Convert `/extra` children into native Extra Card Detail Rems and `/hint` children into front-card hint metadata.
+- Preserve RemNote cloze hints written as `{{answer}}{({hint})}`.
+- Expose native card types and front-card hint metadata in full search/read views for automated validation.
+- Refresh Extra Card Detail Rems before extracting create responses so removed `/extra` prefixes are reflected immediately.
+- Read native card types from the Card object's stable `type` field because `card.getType()` is misrouted by the
+  current RemNote SDK runtime.
+- Add `frontCardHint` and `backCardHint` update fields for writing native forward/reverse card hints without changing
+  the card text, and expose both in full read/search diagnostics.
 - Stop scoped search subtree validation early when a cyclic parent chain is encountered.
 - Fix `insert_children` transaction handling so live RemNote writes return plain result data instead of SDK Rem objects,
   preventing transaction completion timeouts.

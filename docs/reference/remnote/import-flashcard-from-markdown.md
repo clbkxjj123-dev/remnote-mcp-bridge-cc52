@@ -81,3 +81,18 @@ Nesting between bullet items will also be automatically recognized according to 
 ## Sources
 
 - https://help.remnote.com/en/articles/9252072-how-to-import-flashcards-from-text#h_fc1588b3b7
+## Bridge compatibility extensions
+
+The bridge protects two constructs before delegating hierarchy parsing to the RemNote SDK:
+
+- `{{answer}}` is restored as a native RemNote cloze element after import.
+- `{{answer}}{({hint})}` is restored as a native cloze with hint metadata.
+- The Unicode arrow `→` is restored as literal text, so examples such as `2118 → 1101` do not become flashcards.
+- An indented `/extra text` child becomes an Extra Card Detail Rem with the prefix removed.
+- An indented `/hint text` child is folded into its parent card as a front-card hint and the placeholder child is removed.
+
+## Advanced bridge rich text
+
+`update_note.richText` and `richTextBack` accept typed tokens for plain text, exact Rem references, URL images,
+external links, and language-labelled code. Only `http` and `https` media/link URLs are accepted; local file upload
+is intentionally outside the bridge contract.

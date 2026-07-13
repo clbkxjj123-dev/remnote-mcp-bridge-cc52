@@ -112,6 +112,101 @@ describe('RemAdapter', () => {
       expect(plugin.rem.createTreeWithMarkdown).toHaveBeenCalled();
     });
 
+    it('should restore cloze syntax as native cloze rich text', async () => {
+      const result = await adapter.createNote({
+        title: 'Cloze Import',
+        content: '销量预测是{{回归}}问题',
+      });
+
+      const clozeRem = await plugin.rem.findOne(result.remIds[1]);
+      expect(clozeRem?.text).toEqual([
+        '销量预测是',
+        expect.objectContaining({ i: 'm', text: '回归', cId: expect.any(String) }),
+        '问题',
+      ]);
+    });
+
+    it('should preserve literal unicode arrows without creating a flashcard', async () => {
+      const result = await adapter.createNote({
+        title: 'Arrow Import',
+        content: '/extra 下降量：2118 → 1101 → 573',
+      });
+
+      const arrowRem = await plugin.rem.findOne(result.remIds[1]);
+      expect(arrowRem?.text).toEqual(['下降量：2118 ', '→', ' 1101 ', '→', ' 573']);
+      expect(arrowRem?.backText).toBeUndefined();
+    });
+
+    it('should convert /extra children to native extra card details', async () => {
+      const result = await adapter.createNote({
+        title: 'Extra Import',
+        content: 'Question >> Answer\n  /extra Supporting detail',
+      });
+
+      const parent = await plugin.rem.findOne(result.remIds[1]);
+      const children = await parent!.getChildrenRem();
+      expect(children).toHaveLength(1);
+      expect(children[0].text).toEqual(['Supporting detail']);
+      expect(await children[0].hasPowerup(BuiltInPowerupCodes.ExtraCardDetail)).toBe(true);
+    });
+
+    it('should convert /hint children to front-card hint metadata', async () => {
+      const result = await adapter.createNote({
+        title: 'Hint Import',
+        content: 'Question >> Answer\n  /hint Think about the slope',
+      });
+
+      const parent = await plugin.rem.findOne(result.remIds[1]);
+      expect(parent?.text).toEqual([
+        expect.objectContaining({
+          text: 'Question >> Answer',
+          'card-hint-front': 'Think about the slope',
+        }),
+      ]);
+      expect(await parent!.getChildrenRem()).toHaveLength(0);
+      expect(result.titles).not.toContain('/hint Think about the slope');
+    });
+
+    it('should preserve cloze hints as native cloze metadata', async () => {
+      const result = await adapter.createNote({
+        title: 'Cloze Hint Import',
+        content: 'The value is {{42}}{({answer to everything})}',
+      });
+
+      const rem = await plugin.rem.findOne(result.remIds[1]);
+      expect(rem?.text).toEqual([
+        'The value is ',
+        expect.objectContaining({
+          text: '42',
+          cId: expect.any(String),
+          'cloze-hint': 'answer to everything',
+        }),
+      ]);
+    });
+
+    it('should preserve ordered and unordered multilevel list hierarchy', async () => {
+      const result = await adapter.createNote({
+        title: 'Nested Lists',
+        content: [
+          '算法步骤 >>>',
+          '  1. 准备数据',
+          '    - 清洗缺失值',
+          '      - 记录处理规则',
+          '  2. 训练模型',
+          '    - 调整参数',
+        ].join('\n'),
+      });
+
+      const card = await plugin.rem.findOne(result.remIds[1]);
+      const steps = await card!.getChildrenRem();
+      expect(steps.map((rem) => rem.text[0])).toEqual(['1. 准备数据', '2. 训练模型']);
+      const firstChildren = await steps[0].getChildrenRem();
+      expect(firstChildren.map((rem) => rem.text[0])).toEqual(['清洗缺失值']);
+      expect((await firstChildren[0].getChildrenRem()).map((rem) => rem.text[0])).toEqual([
+        '记录处理规则',
+      ]);
+    });
+
     it('should create a note with parent', async () => {
       plugin.addTestRem('parent_1', 'Parent');
 
@@ -281,6 +376,17 @@ describe('RemAdapter', () => {
       );
     });
 
+    it('should reapply title reference tokens after the create transaction commits', async () => {
+      plugin.addTestRem('post-commit-ref-target', 'Target');
+      const result = await adapter.createNote({ title: 'See [[id:post-commit-ref-target]]' });
+      const created = await plugin.rem.findOne(result.remIds[0]);
+      expect(created!.text).toEqual([
+        'See ',
+        expect.objectContaining({ i: 'q', _id: 'post-commit-ref-target' }),
+      ]);
+      expect(plugin.rem.createSingleRemWithMarkdown).not.toHaveBeenCalled();
+    });
+
     it('should reject missing id-token references before creating title Rems', async () => {
       await expect(
         adapter.createNote({
@@ -355,7 +461,7 @@ describe('RemAdapter', () => {
         `  - Basic Backward << Answer`,
         `  - Two-way :: Answer`,
         `  - Disabled >- Answer`,
-        `  - Cloze with {{hidden}}{({hint text})} text`,
+        `  - Cloze with rnbridgeclozeplaceholder0 text`,
         `  - Concept :: Definition`,
         `  - Concept Forward :> Definition`,
         `  - Concept Backward :< Definition`,
@@ -2167,6 +2273,25 @@ describe('RemAdapter', () => {
       expect(aliases.map((a) => a.text?.[0])).toEqual(['Alias One', 'Alias Two']);
     });
 
+    it('should remove only exact matching aliases', async () => {
+      const testRem = plugin.addTestRem('alias_remove_test', 'Aliased note');
+      await testRem.getOrCreateAliasWithText(['\\theta']);
+      await testRem.getOrCreateAliasWithText(['Model Parameters']);
+      const aliasesBeforeRemoval = await testRem.getAliases();
+      const notationAliasRemove = vi.spyOn(aliasesBeforeRemoval[0], 'remove');
+      const englishAliasRemove = vi.spyOn(aliasesBeforeRemoval[1], 'remove');
+
+      const result = await adapter.updateNote({
+        remId: 'alias_remove_test',
+        removeAliases: ['\\theta'],
+      });
+
+      expect(result.remIds).toEqual(['alias_remove_test']);
+      expect(result.titles).toEqual(['[alias removed] \\theta']);
+      expect(notationAliasRemove).toHaveBeenCalledOnce();
+      expect(englishAliasRemove).not.toHaveBeenCalled();
+    });
+
     it('should skip empty and non-string alias entries without throwing', async () => {
       const testRem = plugin.addTestRem('alias_skip_test', 'Note');
 
@@ -2259,6 +2384,56 @@ describe('RemAdapter', () => {
 
       expect(testRem.backText).toEqual(['The answer']);
       expect(result.titles).toEqual(['[back] The answer']);
+    });
+
+    it('should set and read front and back card hints without changing card text', async () => {
+      const testRem = plugin.addTestRem('card_hints_test', 'Front side');
+      testRem.backText = ['Back side'];
+      testRem.setPracticeDirectionMock('both');
+      testRem.setCardTypesMock(['forward', 'backward']);
+
+      const result = await adapter.updateNote({
+        remId: 'card_hints_test',
+        frontCardHint: 'Front hint',
+        backCardHint: 'Back hint',
+      });
+
+      expect(result.remIds).toEqual(['card_hints_test']);
+      expect(testRem.text).toEqual([
+        expect.objectContaining({ text: 'Front side', 'card-hint-front': 'Back hint' }),
+      ]);
+      expect(testRem.backText).toEqual([
+        expect.objectContaining({ text: 'Back side', 'card-hint-back': 'Front hint' }),
+      ]);
+
+      const read = await adapter.readNote({
+        remId: 'card_hints_test',
+        contentMode: 'none',
+        view: 'full',
+      });
+      expect(read.frontCardHint).toBe('Front hint');
+      expect(read.backCardHint).toBe('Back hint');
+      expect(read.cardTypes).toEqual(['forward', 'backward']);
+    });
+
+    it('should preserve title and back text updated with card hints in one request', async () => {
+      const testRem = plugin.addTestRem('card_hints_combined_test', 'Old front');
+      testRem.backText = ['Old back'];
+
+      await adapter.updateNote({
+        remId: 'card_hints_combined_test',
+        title: 'New front',
+        richTextBack: [{ type: 'text', value: 'New back' }],
+        frontCardHint: 'Front hint',
+        backCardHint: 'Back hint',
+      });
+
+      expect(testRem.text).toEqual([
+        expect.objectContaining({ text: 'New front', 'card-hint-front': 'Back hint' }),
+      ]);
+      expect(testRem.backText).toEqual([
+        expect.objectContaining({ text: 'New back', 'card-hint-back': 'Front hint' }),
+      ]);
     });
 
     it('should reparent the rem via setParentId', async () => {
@@ -3901,6 +4076,146 @@ describe('RemAdapter', () => {
       // Should return empty columns and empty values
       expect(result.columns).toHaveLength(0);
       expect(result.rows[0].values).toEqual({});
+    });
+  });
+
+  describe('advanced RemNote capabilities', () => {
+    it('creates and manages a portal without reparenting included rems', async () => {
+      const parent = plugin.addTestRem('portal-parent', 'Portal tests');
+      const source = plugin.addTestRem('portal-source', 'Source');
+
+      const created = await adapter.managePortal({
+        operation: 'create',
+        title: 'Test Portal',
+        parentRemId: parent._id,
+      });
+      await adapter.managePortal({
+        operation: 'add',
+        portalRemId: created.portalRemId,
+        remId: source._id,
+      });
+      const read = await adapter.managePortal({
+        operation: 'read',
+        portalRemId: created.portalRemId,
+      });
+
+      expect(read.includedRems).toEqual([{ remId: source._id, title: 'Source' }]);
+      expect(await source.getParentRem()).toBeUndefined();
+      await adapter.managePortal({
+        operation: 'remove',
+        portalRemId: created.portalRemId,
+        remId: source._id,
+      });
+      expect(
+        (await adapter.managePortal({ operation: 'read', portalRemId: created.portalRemId }))
+          .includedRems
+      ).toEqual([]);
+    });
+
+    it('creates a table with properties and reports unsupported requested types', async () => {
+      const parent = plugin.addTestRem('table-parent', 'Table tests');
+      const result = await adapter.createTable({
+        title: 'Advanced Table',
+        parentRemId: parent._id,
+        columns: [
+          { name: 'Status', type: 'text' },
+          { name: 'Score', type: 'number' },
+        ],
+      });
+
+      expect(result.columns).toHaveLength(2);
+      expect(result.columns[0].typeApplied).toBe(true);
+      expect(result.columns[1]).toMatchObject({ requestedType: 'number', typeApplied: false });
+    });
+
+    it('creates a tagged table row with initial property values', async () => {
+      const table = await plugin.rem.createTable();
+      await table.setText(['Rows']);
+      const property = await plugin.rem.createRem();
+      await property.setText(['Status']);
+      await property.setIsProperty(true);
+      await property.setParent(table);
+
+      const result = await adapter.createTableRow({
+        tableRemId: table._id,
+        title: 'Row One',
+        values: { [property._id]: { kind: 'text', text: 'Active' } },
+      });
+      const row = await plugin.rem.findOne(result.remId);
+
+      expect(row!.getTags()).toContain(table._id);
+      expect(await row!.getTagPropertyValue(property._id)).toEqual(['Active']);
+    });
+
+    it('sets and clears controlled Rem features', async () => {
+      const rem = plugin.addTestRem('feature-rem', 'Feature Rem');
+      const template = plugin.addTestRem('template-rem', 'Template');
+
+      const result = await adapter.setRemFeatures({
+        remId: rem._id,
+        todoStatus: 'finished',
+        codeLanguage: 'python',
+        isQuote: true,
+        isListItem: true,
+        templateRemId: template._id,
+      });
+
+      expect(result).toMatchObject({
+        todoStatus: 'Finished',
+        codeLanguage: 'python',
+        isQuote: true,
+        isListItem: true,
+        templateRemId: template._id,
+      });
+
+      const cleared = await adapter.setRemFeatures({
+        remId: rem._id,
+        todoStatus: 'clear',
+        codeLanguage: null,
+        templateRemId: null,
+      });
+      expect(cleared).not.toHaveProperty('todoStatus');
+      expect(cleared).not.toHaveProperty('codeLanguage');
+      expect(cleared).not.toHaveProperty('templateRemId');
+    });
+
+    it('creates external links and rejects non-http URLs before creation', async () => {
+      const parent = plugin.addTestRem('link-parent', 'Links');
+      const result = await adapter.createLinkRem({
+        url: 'https://example.com/resource',
+        title: 'Example Resource',
+        parentRemId: parent._id,
+      });
+      expect(result).toMatchObject({ title: 'Example Resource' });
+
+      const callsBefore = plugin.rem.createLinkRem.mock.calls.length;
+      await expect(adapter.createLinkRem({ url: 'file:///tmp/private.txt' })).rejects.toThrow(
+        'valid http(s) URL'
+      );
+      expect(plugin.rem.createLinkRem).toHaveBeenCalledTimes(callsBefore);
+    });
+
+    it('builds image, link, code, and reference rich text tokens', async () => {
+      plugin.addTestRem('token-target', 'Target');
+      const rem = plugin.addTestRem('token-rem', 'Old');
+      await adapter.updateNote({
+        remId: rem._id,
+        richText: [
+          { type: 'text', value: 'See ' },
+          { type: 'rem', remId: 'token-target' },
+          { type: 'image', url: 'https://example.com/image.png', width: 320 },
+          { type: 'link', value: 'Docs', url: 'https://example.com/docs' },
+          { type: 'code', value: 'print(1)', language: 'python' },
+        ],
+      });
+
+      expect(rem.text).toEqual([
+        'See ',
+        expect.objectContaining({ i: 'q', _id: 'token-target' }),
+        expect.objectContaining({ i: 'i', url: 'https://example.com/image.png', width: 320 }),
+        expect.objectContaining({ text: 'Docs', qId: 'https://example.com/docs' }),
+        expect.objectContaining({ text: 'print(1)', language: 'python' }),
+      ]);
     });
   });
 });
