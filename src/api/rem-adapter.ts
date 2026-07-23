@@ -652,6 +652,16 @@ export class RemAdapter {
 
       switch (discriminant) {
         case 'm': {
+          // Card hint markers are their own richText element (native /hint
+          // output) carrying the hint text in `text`, flagged by a boolean
+          // card-hint-front/back field. They are metadata, not front/back
+          // content — skip them here (read via getFrontCardHintForRem /
+          // getBackCardHint instead) so a hint never leaks into the rendered
+          // title/detail/headline.
+          if (el['card-hint-front'] === true || el['card-hint-back'] === true) {
+            break;
+          }
+
           // Formatted text
           let text = (el.text as string) || '';
           if (!text) break;
@@ -1879,7 +1889,7 @@ export class RemAdapter {
       this.getParentContext(rem),
       this.getAncestors(rem, options.ancestorDepth),
       options.view === 'full' ? this.getCardTypes(rem) : Promise.resolve([]),
-      options.view === 'full' ? Promise.resolve(this.getFrontCardHint(rem.backText)) : undefined,
+      options.view === 'full' ? Promise.resolve(this.getFrontCardHintForRem(rem)) : undefined,
       options.view === 'full' ? Promise.resolve(this.getBackCardHint(rem.text)) : undefined,
     ]);
 
@@ -2142,7 +2152,7 @@ export class RemAdapter {
         view !== 'compact' ? this.getAliases(child) : Promise.resolve([]),
         view !== 'compact' ? this.getTags(child, tagNameCache) : Promise.resolve([]),
         view === 'full' ? this.getCardTypes(child) : Promise.resolve([]),
-        view === 'full' ? Promise.resolve(this.getFrontCardHint(child.backText)) : undefined,
+        view === 'full' ? Promise.resolve(this.getFrontCardHintForRem(child)) : undefined,
         view === 'full' ? Promise.resolve(this.getBackCardHint(child.text)) : undefined,
       ]);
 
@@ -2424,25 +2434,37 @@ export class RemAdapter {
     return result;
   }
 
+  /**
+   * RemNote represents a card hint as its own richText element (this is what
+   * the native /hint editor command produces), not as a property grafted onto
+   * an existing content element. The hint element's own `text` IS the hint
+   * string; the `card-hint-front`/`card-hint-back` field is a boolean flag,
+   * not the hint value. Verified against real /hint-authored Rems:
+   *   backText: [{ i:'m', text:'<hint>', 'card-hint-back': true }, <answer>]
+   *   text:     [<question>, { i:'m', text:'<hint>', 'card-hint-front': true }]
+   * Writing the hint value onto the answer/question element itself (the
+   * previous implementation) makes RemNote render that whole element as the
+   * hint bubble, hiding the real content — this was the root cause of the
+   * "answer becomes the hint" bug.
+   */
   private setCardHint(
     richText: RichTextInterface,
     field: 'card-hint-front' | 'card-hint-back',
     hint: string
   ): RichTextInterface {
-    let applied = false;
-    const result = richText.map((element) => {
-      if (applied) return element;
-      if (typeof element === 'string') {
-        applied = true;
-        return { i: 'm', text: element, [field]: hint };
-      }
-      if (element && typeof element === 'object' && 'text' in element) {
-        applied = true;
-        return { ...element, [field]: hint };
-      }
-      return element;
-    }) as RichTextInterface;
-    return applied ? result : [{ i: 'm', text: '', [field]: hint }];
+    const withoutExistingHint = richText.filter((element) => {
+      const record =
+        element && typeof element === 'object' ? (element as Record<string, unknown>) : undefined;
+      return !(record && record[field] === true);
+    });
+    const hintElement = { i: 'm', text: hint, [field]: true };
+    // card-hint-back precedes the answer it clarifies; card-hint-front
+    // follows the question it clarifies (matches real /hint-authored Rems).
+    return (
+      field === 'card-hint-back'
+        ? [hintElement, ...withoutExistingHint]
+        : [...withoutExistingHint, hintElement]
+    ) as RichTextInterface;
   }
 
   private getCardHint(
@@ -2452,8 +2474,8 @@ export class RemAdapter {
     for (const element of richText ?? []) {
       const record =
         element && typeof element === 'object' ? (element as Record<string, unknown>) : undefined;
-      if (record && field in record && typeof record[field] === 'string') {
-        return record[field] as string;
+      if (record && record[field] === true && typeof record.text === 'string') {
+        return record.text;
       }
     }
     return undefined;
@@ -2465,6 +2487,23 @@ export class RemAdapter {
 
   private getBackCardHint(richText: RichTextInterface | undefined): string | undefined {
     return this.getCardHint(richText, 'card-hint-front');
+  }
+
+  /**
+   * Read the front-card hint (shown during forward practice) for a Rem.
+   * Markdown-imported Basic ">>" cards keep front+answer inline in `text`
+   * (split by a card-delimiter) and leave `backText` empty, so the hint may
+   * live on the inline answer portion instead of the canonical backText field.
+   */
+  private getFrontCardHintForRem(rem: PluginRem): string | undefined {
+    const fromBackText = this.getFrontCardHint(rem.backText);
+    if (fromBackText !== undefined) return fromBackText;
+
+    const delimiterIndex = this.getCardDelimiterIndex(rem.text);
+    if (delimiterIndex >= 0 && Array.isArray(rem.text)) {
+      return this.getFrontCardHint(rem.text.slice(delimiterIndex + 1) as RichTextInterface);
+    }
+    return undefined;
   }
 
   private async getCardTypes(rem: PluginRem): Promise<string[]> {
@@ -2490,7 +2529,23 @@ export class RemAdapter {
           throw new Error('/hint must be nested under a flashcard Rem');
         }
         const hint = text.replace(/^\/hint\s*/, '');
-        await parent.setText(this.setCardHint(parent.text ?? [], 'card-hint-front', hint));
+        // Bare /hint (no direction picked) is the default forward-practice
+        // hint (RemNote: "Hint for front card") — card-hint-back, scoped to
+        // the answer portion for delimiter-embedded ">>" cards.
+        const parentText = parent.text ?? [];
+        const delimiterIndex = this.getCardDelimiterIndex(parentText);
+        const newParentText =
+          delimiterIndex >= 0
+            ? ([
+                ...parentText.slice(0, delimiterIndex + 1),
+                ...this.setCardHint(
+                  parentText.slice(delimiterIndex + 1) as RichTextInterface,
+                  'card-hint-back',
+                  hint
+                ),
+              ] as RichTextInterface)
+            : this.setCardHint(parentText, 'card-hint-back', hint);
+        await parent.setText(newParentText);
         await rem.remove();
         continue;
       }
@@ -3244,6 +3299,8 @@ export class RemAdapter {
     content?: string;
     contentStructured?: StructuredContentNode[];
     contentProperties?: ContentProperties;
+    rawText?: unknown[];
+    rawBackText?: unknown[];
   }> {
     const depth = params.depth ?? DEFAULT_DEPTH;
     const contentMode = this.parseContentMode(
@@ -3287,7 +3344,7 @@ export class RemAdapter {
       this.getParentContext(rem),
       this.getAncestors(rem, ancestorDepth),
       view === 'full' ? this.getCardTypes(rem) : Promise.resolve([]),
-      view === 'full' ? Promise.resolve(this.getFrontCardHint(rem.backText)) : undefined,
+      view === 'full' ? Promise.resolve(this.getFrontCardHintForRem(rem)) : undefined,
       view === 'full' ? Promise.resolve(this.getBackCardHint(rem.text)) : undefined,
       view === 'full' ? Promise.resolve(this.getRichContentMetadata(rem)) : undefined,
       view === 'full' ? this.getControlledRemFeatures(rem) : undefined,
@@ -3346,6 +3403,15 @@ export class RemAdapter {
       ...(content !== undefined ? { content } : {}),
       ...(contentStructured ? { contentStructured } : {}),
       ...(contentProperties ? { contentProperties } : {}),
+      // Raw rich-text arrays for bridge development/diagnostics: the rendered
+      // fields above cannot represent formatting-level data (e.g. card hint
+      // markers), which has made hint bugs invisible to API round-trips.
+      ...(view === 'full'
+        ? {
+            rawText: (rem.text ?? []) as unknown[],
+            rawBackText: (rem.backText ?? []) as unknown[],
+          }
+        : {}),
     };
   }
 
@@ -3691,15 +3757,49 @@ export class RemAdapter {
 
     if (params.frontCardHint !== undefined) {
       const hint = this.requireString(params.frontCardHint, 'frontCardHint');
-      currentBackText = this.setCardHint(currentBackText, 'card-hint-back', hint);
-      await rem.setBackText(currentBackText);
+      const delimiterIndex = this.getCardDelimiterIndex(currentFrontText);
+      const backTextEmpty = !currentBackText || currentBackText.length === 0;
+
+      if (delimiterIndex >= 0 && backTextEmpty) {
+        // Markdown-imported Basic ">>" cards keep front+answer inline in `text`
+        // (split by a card-delimiter) and leave `backText` empty — the answer
+        // lives after the delimiter, not in the (unused) backText field.
+        // Scope the hint element to that inline answer portion.
+        const before = currentFrontText.slice(0, delimiterIndex + 1);
+        const after = this.setCardHint(
+          currentFrontText.slice(delimiterIndex + 1) as RichTextInterface,
+          'card-hint-back',
+          hint
+        );
+        currentFrontText = [...before, ...after] as RichTextInterface;
+        await rem.setText(currentFrontText);
+      } else {
+        currentBackText = this.setCardHint(currentBackText, 'card-hint-back', hint);
+        await rem.setBackText(currentBackText);
+      }
       if (!remIds.includes(remId)) remIds.push(remId);
       titles.push('[frontCardHint updated]');
     }
 
     if (params.backCardHint !== undefined) {
       const hint = this.requireString(params.backCardHint, 'backCardHint');
-      currentFrontText = this.setCardHint(currentFrontText, 'card-hint-front', hint);
+      const frontDelimiterIndex = this.getCardDelimiterIndex(currentFrontText);
+
+      if (frontDelimiterIndex >= 0) {
+        // Keep the hint scoped to the question portion, before the
+        // card-delimiter — not appended after the inline answer that follows it.
+        const questionPart = this.setCardHint(
+          currentFrontText.slice(0, frontDelimiterIndex) as RichTextInterface,
+          'card-hint-front',
+          hint
+        );
+        currentFrontText = [
+          ...questionPart,
+          ...currentFrontText.slice(frontDelimiterIndex),
+        ] as RichTextInterface;
+      } else {
+        currentFrontText = this.setCardHint(currentFrontText, 'card-hint-front', hint);
+      }
       await rem.setText(currentFrontText);
       if (!remIds.includes(remId)) remIds.push(remId);
       titles.push('[backCardHint updated]');

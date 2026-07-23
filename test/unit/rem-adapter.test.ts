@@ -150,7 +150,14 @@ describe('RemAdapter', () => {
       expect(await children[0].hasPowerup(BuiltInPowerupCodes.ExtraCardDetail)).toBe(true);
     });
 
-    it('should convert /hint children to front-card hint metadata', async () => {
+    it('should convert bare /hint children to a forward-practice card-hint-back element', async () => {
+      // Bare /hint (no direction picked in the editor) is RemNote's default
+      // "Hint for front card" (forward practice) — stored as card-hint-back,
+      // its own richText element (not grafted onto the answer text). The
+      // mock markdown parser keeps "Question >> Answer" as one string
+      // (unlike real RemNote, which splits it at a card-delimiter); the
+      // delimiter-aware scoping this triggers for real ">>" cards is covered
+      // separately by the "delimiter-embedded" hint tests in updateNote.
       const result = await adapter.createNote({
         title: 'Hint Import',
         content: 'Question >> Answer\n  /hint Think about the slope',
@@ -158,10 +165,8 @@ describe('RemAdapter', () => {
 
       const parent = await plugin.rem.findOne(result.remIds[1]);
       expect(parent?.text).toEqual([
-        expect.objectContaining({
-          text: 'Question >> Answer',
-          'card-hint-front': 'Think about the slope',
-        }),
+        expect.objectContaining({ text: 'Think about the slope', 'card-hint-back': true }),
+        'Question >> Answer',
       ]);
       expect(await parent!.getChildrenRem()).toHaveLength(0);
       expect(result.titles).not.toContain('/hint Think about the slope');
@@ -2399,11 +2404,16 @@ describe('RemAdapter', () => {
       });
 
       expect(result.remIds).toEqual(['card_hints_test']);
+      // A hint is its own richText element (as produced by the native /hint
+      // command): the element's `text` IS the hint string, and the
+      // card-hint-front/back field is a boolean flag, not the hint value.
       expect(testRem.text).toEqual([
-        expect.objectContaining({ text: 'Front side', 'card-hint-front': 'Back hint' }),
+        'Front side',
+        expect.objectContaining({ text: 'Back hint', 'card-hint-front': true }),
       ]);
       expect(testRem.backText).toEqual([
-        expect.objectContaining({ text: 'Back side', 'card-hint-back': 'Front hint' }),
+        expect.objectContaining({ text: 'Front hint', 'card-hint-back': true }),
+        'Back side',
       ]);
 
       const read = await adapter.readNote({
@@ -2414,6 +2424,67 @@ describe('RemAdapter', () => {
       expect(read.frontCardHint).toBe('Front hint');
       expect(read.backCardHint).toBe('Back hint');
       expect(read.cardTypes).toEqual(['forward', 'backward']);
+    });
+
+    it('should attach frontCardHint as its own element scoped to the inline answer for delimiter-embedded ">>" cards, not a phantom backText', async () => {
+      // Markdown-imported Basic ">>" cards keep front+answer inline in `text`
+      // (split by a card-delimiter) and leave `backText` empty. Regression
+      // test for two bugs: (1) frontCardHint wrote a hint-only backText that
+      // RemNote rendered in place of the real answer; (2) the hint value was
+      // grafted onto the answer element instead of living in its own element,
+      // making RemNote render the answer text itself as the hint bubble.
+      const testRem = plugin.addTestRem('delimiter_hint_test', '');
+      testRem.text = ['Question', { i: 's' }, 'Real answer'] as unknown as string[];
+      testRem.setCardTypesMock(['forward']);
+
+      const result = await adapter.updateNote({
+        remId: 'delimiter_hint_test',
+        frontCardHint: 'Think about the derivative',
+      });
+
+      expect(result.remIds).toEqual(['delimiter_hint_test']);
+      expect(testRem.backText ?? []).toEqual([]);
+      expect(testRem.text).toEqual([
+        'Question',
+        { i: 's' },
+        expect.objectContaining({ text: 'Think about the derivative', 'card-hint-back': true }),
+        'Real answer',
+      ]);
+
+      const read = await adapter.readNote({
+        remId: 'delimiter_hint_test',
+        contentMode: 'none',
+        view: 'full',
+      });
+      expect(read.headline).toBe('Question >> Real answer');
+      expect(read.frontCardHint).toBe('Think about the derivative');
+    });
+
+    it('should scope backCardHint to the question portion (before the delimiter) for delimiter-embedded ">>" cards', async () => {
+      const testRem = plugin.addTestRem('delimiter_back_hint_test', '');
+      testRem.text = ['Question', { i: 's' }, 'Real answer'] as unknown as string[];
+      testRem.setPracticeDirectionMock('both');
+      testRem.setCardTypesMock(['forward', 'backward']);
+
+      await adapter.updateNote({
+        remId: 'delimiter_back_hint_test',
+        backCardHint: 'Recall the question',
+      });
+
+      expect(testRem.text).toEqual([
+        'Question',
+        expect.objectContaining({ text: 'Recall the question', 'card-hint-front': true }),
+        { i: 's' },
+        'Real answer',
+      ]);
+
+      const read = await adapter.readNote({
+        remId: 'delimiter_back_hint_test',
+        contentMode: 'none',
+        view: 'full',
+      });
+      expect(read.headline).toBe('Question >> Real answer');
+      expect(read.backCardHint).toBe('Recall the question');
     });
 
     it('should preserve title and back text updated with card hints in one request', async () => {
@@ -2429,10 +2500,12 @@ describe('RemAdapter', () => {
       });
 
       expect(testRem.text).toEqual([
-        expect.objectContaining({ text: 'New front', 'card-hint-front': 'Back hint' }),
+        'New front',
+        expect.objectContaining({ text: 'Back hint', 'card-hint-front': true }),
       ]);
       expect(testRem.backText).toEqual([
-        expect.objectContaining({ text: 'New back', 'card-hint-back': 'Front hint' }),
+        expect.objectContaining({ text: 'Front hint', 'card-hint-back': true }),
+        'New back',
       ]);
     });
 
